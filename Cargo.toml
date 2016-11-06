@@ -1,6 +1,16 @@
 [package]
+authors = ["Ceri Storey <cez@necrofish.org.uk>"]
 name = "pg-queue"
 version = "0.1.0"
-authors = ["Ceri Storey <cez@necrofish.org.uk>"]
 
 [dependencies]
+clap = "1.4.5"
+env_logger = "0.3.5"
+error-chain = "*"
+flate2 = "0.2.14"
+log = "0.3.6"
+postgres = "0.11.11"
+r2d2 = "0.7.0"
+r2d2_postgres = "0.10.1"
+time = "0.1"
+url = "1.2.0"
