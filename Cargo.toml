@@ -1,6 +1,7 @@
 [package]
 authors = ["Ceri Storey <cez@necrofish.org.uk>"]
 name = "pg-queue"
+license = "MIT"
 version = "0.1.0"
 
 [dependencies]
