@@ -5,7 +5,6 @@ license = "MIT"
 version = "0.1.0"
 
 [dependencies]
-clap = "1.4.5"
 error-chain = "*"
 flate2 = "0.2.14"
 log = "0.3.6"

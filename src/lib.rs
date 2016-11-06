@@ -9,7 +9,7 @@ extern crate error_chain;
 
 use std::collections::BTreeMap;
 use r2d2::Pool;
-use r2d2_postgres::{SslMode, PostgresConnectionManager};
+use r2d2_postgres::PostgresConnectionManager;
 
 static INSERT_ROW_SQL: &'static str = "INSERT INTO logs (body) values($1) RETURNING id";
 static SEND_NOTIFY_SQL: &'static str = "SELECT pg_notify('logs', $1 :: bigint :: text)";
