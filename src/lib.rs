@@ -49,7 +49,7 @@ pub struct Entry {
     pub data: Vec<u8>,
 }
 
-pub fn setup(conn: &postgres::Connection) -> Result<()> {
+pub fn setup<C: postgres::GenericConnection>(conn: &C) -> Result<()> {
     try!(conn.batch_execute(CREATE_TABLE_SQL));
     Ok(())
 }
@@ -102,6 +102,11 @@ impl Consumer {
 
     pub fn poll(&mut self) -> Result<Option<Entry>> {
         let conn = try!(self.pool.get());
+        self.poll_item(&conn)
+
+    }
+
+    fn poll_item(&mut self, conn: &postgres::Connection) -> Result<Option<Entry>> {
         let t = try!(conn.transaction());
         let rows = try!(t.query(FETCH_NEXT_ROW, &[&self.last_seen_offset]));
         debug!("next rows:{:?}", rows.len());
@@ -119,6 +124,25 @@ impl Consumer {
         };
         trace!("returning: {:?}", res);
         Ok(res)
+    }
+
+    pub fn wait_next(&mut self) -> Result<Entry> {
+        let conn = try!(self.pool.get());
+        try!(conn.execute("LISTEN logs", &[]));
+        loop {
+            let notifications = conn.notifications();
+            while let Some(n) = notifications.iter().next() {
+                debug!("Saw previous notification: {:?}", n);
+            }
+            if let Some(entry) = try!(self.poll_item(&conn)) {
+                return Ok(entry);
+            }
+            debug!("Awaiting notifications");
+            if let Some(n) = notifications.blocking_iter().next() {
+                debug!("Saw new notification:{:?}", n);
+            }
+        }
+
     }
 
     pub fn commit_upto(&self, entry: &Entry) -> Result<()> {
