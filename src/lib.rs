@@ -36,6 +36,8 @@ static CREATE_TABLE_SQL: &'static str = "
         CREATE INDEX IF NOT EXISTS logs_timestamp_idx ON logs (written_at);
         ";
 
+static LISTEN: &'static str = "LISTEN logs";
+
 error_chain!{
     foreign_links {
         postgres::error::Error, Pg;
@@ -90,7 +92,8 @@ impl Consumer {
     pub fn new(pool: Pool<PostgresConnectionManager>, name: &str) -> Result<Self> {
         let conn = try!(pool.get());
         let t = try!(conn.transaction());
-        let rows = try!(t.query(FETCH_CONSUMER_POSITION, &[&name]));
+        let stmt = try!(t.prepare_cached(FETCH_CONSUMER_POSITION));
+        let rows = try!(stmt.query(&[&name]));
         debug!("next rows:{:?}", rows.len());
         let position = rows.iter().next().map(|r| r.get(0)).unwrap_or(-1i64);
         Ok(Consumer {
@@ -108,7 +111,8 @@ impl Consumer {
 
     fn poll_item(&mut self, conn: &postgres::Connection) -> Result<Option<Entry>> {
         let t = try!(conn.transaction());
-        let rows = try!(t.query(FETCH_NEXT_ROW, &[&self.last_seen_offset]));
+        let next_row = try!(t.prepare_cached(FETCH_NEXT_ROW));
+        let rows = try!(next_row.query(&[&self.last_seen_offset]));
         debug!("next rows:{:?}", rows.len());
         let res = if let Some(r) = rows.iter().next() {
             let id: i64 = r.get(0);
@@ -128,7 +132,8 @@ impl Consumer {
 
     pub fn wait_next(&mut self) -> Result<Entry> {
         let conn = try!(self.pool.get());
-        try!(conn.execute("LISTEN logs", &[]));
+        let listen = try!(conn.prepare_cached(LISTEN));
+        try!(listen.execute(&[]));
         loop {
             let notifications = conn.notifications();
             while let Some(n) = notifications.iter().next() {
@@ -142,13 +147,13 @@ impl Consumer {
                 debug!("Saw new notification:{:?}", n);
             }
         }
-
     }
 
     pub fn commit_upto(&self, entry: &Entry) -> Result<()> {
         let conn = try!(self.pool.get());
         let t = try!(conn.transaction());
-        try!(t.execute(UPSERT_CONSUMER_OFFSET, &[&self.name, &entry.offset]));
+        let upsert = try!(t.prepare_cached(UPSERT_CONSUMER_OFFSET));
+        try!(upsert.execute(&[&self.name, &entry.offset]));
         try!(t.commit());
         Ok(())
     }
@@ -156,22 +161,25 @@ impl Consumer {
     pub fn discard_upto(&self, limit: i64) -> Result<()> {
         let conn = try!(self.pool.get());
         let t = try!(conn.transaction());
-        try!(t.execute(DISCARD_ENTRIES, &[&limit]));
+        let discard = try!(t.prepare_cached(DISCARD_ENTRIES));
+        try!(discard.execute(&[&limit]));
         try!(t.commit());
         Ok(())
     }
     pub fn consumers(&self) -> Result<BTreeMap<String, i64>> {
         let conn = try!(self.pool.get());
         let t = try!(conn.transaction());
-        let rows = try!(t.query(LIST_CONSUMERS, &[]));
+        let list = try!(t.prepare_cached(LIST_CONSUMERS));
+        let rows = try!(list.query(&[]));
 
         Ok(rows.iter().map(|r| (r.get(0), r.get(1))).collect())
     }
     pub fn clear_offset(&mut self) -> Result<()> {
         let conn = try!(self.pool.get());
         let t = try!(conn.transaction());
+        let discard = try!(t.prepare_cached(DISCARD_CONSUMER));
 
-        try!(t.execute(DISCARD_CONSUMER, &[&self.name]));
+        try!(discard.execute(&[&self.name]));
         try!(t.commit());
         Ok(())
     }
