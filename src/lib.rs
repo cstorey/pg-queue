@@ -57,16 +57,19 @@ pub fn setup<C: postgres::GenericConnection>(conn: &C) -> Result<()> {
 }
 
 pub struct Producer {
-    pool: Pool<PostgresConnectionManager>,
+    conn: r2d2::PooledConnection<PostgresConnectionManager>,
+}
+pub struct Batch<'a> {
+    transaction: postgres::Transaction<'a>,
 }
 
 impl Producer {
     pub fn new(pool: Pool<PostgresConnectionManager>) -> Result<Self> {
-        Ok(Producer { pool: pool })
+        let conn = try!(pool.get());
+        Ok(Producer { conn: conn })
     }
     pub fn produce(&mut self, body: &[u8]) -> Result<()> {
-        let conn = try!(self.pool.get());
-        let t = try!(conn.transaction());
+        let t = try!(self.conn.transaction());
         {
             let rows = try!(t.query(INSERT_ROW_SQL, &[&body]));
             for r in rows.iter() {
@@ -78,6 +81,30 @@ impl Producer {
         try!(t.commit());
 
         debug!("Wrote: {:?}", body.len());
+        Ok(())
+    }
+
+    pub fn batch(&mut self) -> Result<Batch> {
+        let t = try!(self.conn.transaction());
+        Ok(Batch { transaction: t })
+    }
+}
+
+impl<'a> Batch<'a> {
+    pub fn produce(&self, body: &[u8]) -> Result<()> {
+        let rows = try!(self.transaction.query(INSERT_ROW_SQL, &[&body]));
+        for r in rows.iter() {
+            let id: i64 = r.get(0);
+            debug!("id: {}", id);
+            try!(self.transaction.query(SEND_NOTIFY_SQL, &[&id]));
+        }
+        debug!("Wrote: {:?}", body.len());
+        Ok(())
+    }
+
+    pub fn commit(self) -> Result<()> {
+        try!(self.transaction.commit());
+        debug!("Committed");
         Ok(())
     }
 }
