@@ -7,11 +7,11 @@ extern crate r2d2_postgres;
 #[macro_use]
 extern crate error_chain;
 
-use std::collections::{BTreeMap,VecDeque};
 use r2d2::Pool;
 use r2d2_postgres::PostgresConnectionManager;
+use std::collections::{BTreeMap, VecDeque};
 
-const LIMIT_BUFFER : i64 = 1024;
+const LIMIT_BUFFER: i64 = 1024;
 
 static INSERT_ROW_SQL: &'static str = "INSERT INTO logs (body) values($1) RETURNING id";
 static SEND_NOTIFY_SQL: &'static str = "SELECT pg_notify('logs', $1 :: bigint :: text)";
@@ -47,7 +47,7 @@ error_chain!{
     }
 }
 
-#[derive(Debug,Clone,Eq,PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Entry {
     pub offset: i64,
     pub data: Vec<u8>,
@@ -137,14 +137,13 @@ impl Consumer {
     pub fn poll(&mut self) -> Result<Option<Entry>> {
         let conn = try!(self.pool.get());
         self.poll_item(&conn)
-
     }
 
     fn poll_item(&mut self, conn: &postgres::Connection) -> Result<Option<Entry>> {
         if let Some(entry) = self.buf.pop_front() {
             trace!("returning (from buffer): {:?}", entry);
             self.last_seen_offset = entry.offset;
-            return Ok(Some(entry))
+            return Ok(Some(entry));
         }
 
         let t = try!(conn.transaction());
@@ -159,13 +158,13 @@ impl Consumer {
                 offset: id,
                 data: body,
             })
-        };
+        }
 
         if let Some(res) = self.buf.pop_front() {
             self.last_seen_offset = res.offset;
             trace!("returning (from db): {:?}", res);
             Ok(Some(res))
-        } else  {
+        } else {
             trace!("nothing yet");
             Ok(None)
         }

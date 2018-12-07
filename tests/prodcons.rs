@@ -6,13 +6,13 @@ extern crate postgres;
 extern crate r2d2;
 extern crate r2d2_postgres;
 
+use r2d2::Pool;
+use r2d2_postgres::{PostgresConnectionManager, SslMode};
 use std::env;
 use std::thread;
 use std::time;
-use r2d2::Pool;
-use r2d2_postgres::{SslMode, PostgresConnectionManager};
 
-const DEFAULT_URL : &'static str = "postgres://postgres@localhost/";
+const DEFAULT_URL: &'static str = "postgres://postgres@localhost/";
 
 #[derive(Debug)]
 struct UseTempSchema(String);
@@ -21,44 +21,54 @@ impl r2d2::CustomizeConnection<postgres::Connection, r2d2_postgres::Error> for U
     fn on_acquire(&self, conn: &mut postgres::Connection) -> Result<(), r2d2_postgres::Error> {
         loop {
             let t = try!(conn.transaction().map_err(r2d2_postgres::Error::Other));
-            let nschemas : i64 =  {
-            let rows = try!(t.query("SELECT count(*) from pg_catalog.pg_namespace n where n.nspname = $1", &[&self.0]) .map_err(r2d2_postgres::Error::Other));
-            let row = rows.get(0);
-                row.get(0) };
+            let nschemas: i64 = {
+                let rows = try!(
+                    t.query(
+                        "SELECT count(*) from pg_catalog.pg_namespace n where n.nspname = $1",
+                        &[&self.0]
+                    ).map_err(r2d2_postgres::Error::Other)
+                );
+                let row = rows.get(0);
+                row.get(0)
+            };
             debug!("Number of {} schemas:{}", self.0, nschemas);
             if nschemas == 0 {
-                match t.execute(&format!("CREATE SCHEMA \"{}\"", self.0), &[])
-                    .map_err(r2d2_postgres::Error::Other) {
-                        Ok(_) => {
-                            try!(t.commit().map_err(r2d2_postgres::Error::Other));
-                            break;
-                        },
-                        Err(e) => warn!("Error creating schema:{:?}: {:?}", self.0, e),
+                match t
+                    .execute(&format!("CREATE SCHEMA \"{}\"", self.0), &[])
+                    .map_err(r2d2_postgres::Error::Other)
+                {
+                    Ok(_) => {
+                        try!(t.commit().map_err(r2d2_postgres::Error::Other));
+                        break;
                     }
+                    Err(e) => warn!("Error creating schema:{:?}: {:?}", self.0, e),
+                }
             } else {
-                break
+                break;
             }
-        };
-        try!(conn.execute(&format!("SET search_path TO \"{}\"", self.0), &[])
-                .map_err(r2d2_postgres::Error::Other));
+        }
+        try!(
+            conn.execute(&format!("SET search_path TO \"{}\"", self.0), &[])
+                .map_err(r2d2_postgres::Error::Other)
+        );
         Ok(())
     }
 }
 
-fn pool(schema: &str) ->Pool<PostgresConnectionManager>{
-    let url = env::var("POSTGRES_URL").unwrap_or_else(|_| DEFAULT_URL.to_string()); 
+fn pool(schema: &str) -> Pool<PostgresConnectionManager> {
+    let url = env::var("POSTGRES_URL").unwrap_or_else(|_| DEFAULT_URL.to_string());
     debug!("Use schema name: {}", schema);
     let config = r2d2::Config::builder()
         .pool_size(2)
         .connection_customizer(Box::new(UseTempSchema(schema.to_string())))
         .build();
-    let manager = PostgresConnectionManager::new(&*url, SslMode::None)
-        .expect("postgres");
+    let manager = PostgresConnectionManager::new(&*url, SslMode::None).expect("postgres");
     let pool = Pool::new(config, manager).expect("pool");
     let conn = pool.get().expect("temp connection");
     let t = conn.transaction().expect("begin");
     for table in &["logs", "log_consumer_positions"] {
-        conn.execute(&format!("DROP TABLE IF EXISTS {}", table), &[]).expect("drop table");
+        conn.execute(&format!("DROP TABLE IF EXISTS {}", table), &[])
+            .expect("drop table");
     }
     pg_queue::setup(&t).expect("setup");
     t.commit().expect("commit");
@@ -81,7 +91,12 @@ fn can_produce_one() {
     let mut cons = pg_queue::Consumer::new(pool.clone(), "default").expect("consumer");
     prod.produce(b"42").expect("produce");
 
-    assert_eq!(cons.poll().expect("poll").map(|e| String::from_utf8_lossy(&e.data).to_string()), Some("42".to_string()));
+    assert_eq!(
+        cons.poll()
+            .expect("poll")
+            .map(|e| String::from_utf8_lossy(&e.data).to_string()),
+        Some("42".to_string())
+    );
     assert_eq!(cons.poll().expect("poll").map(|e| e.data), None)
 }
 
@@ -95,9 +110,18 @@ fn can_produce_several() {
     prod.produce(b"1").expect("produce");
     prod.produce(b"2").expect("produce");
 
-    assert_eq!(cons.poll().expect("poll").map(|e| e.data), Some(b"0".to_vec()));
-    assert_eq!(cons.poll().expect("poll").map(|e| e.data), Some(b"1".to_vec()));
-    assert_eq!(cons.poll().expect("poll").map(|e| e.data), Some(b"2".to_vec()));
+    assert_eq!(
+        cons.poll().expect("poll").map(|e| e.data),
+        Some(b"0".to_vec())
+    );
+    assert_eq!(
+        cons.poll().expect("poll").map(|e| e.data),
+        Some(b"1".to_vec())
+    );
+    assert_eq!(
+        cons.poll().expect("poll").map(|e| e.data),
+        Some(b"2".to_vec())
+    );
     assert_eq!(cons.poll().expect("poll").map(|e| e.data), None)
 }
 
@@ -115,9 +139,18 @@ fn can_produce_in_batches() {
         batch.commit().expect("commit");
     }
 
-    assert_eq!(cons.poll().expect("poll").map(|e| e.data), Some(b"0".to_vec()));
-    assert_eq!(cons.poll().expect("poll").map(|e| e.data), Some(b"1".to_vec()));
-    assert_eq!(cons.poll().expect("poll").map(|e| e.data), Some(b"2".to_vec()));
+    assert_eq!(
+        cons.poll().expect("poll").map(|e| e.data),
+        Some(b"0".to_vec())
+    );
+    assert_eq!(
+        cons.poll().expect("poll").map(|e| e.data),
+        Some(b"1".to_vec())
+    );
+    assert_eq!(
+        cons.poll().expect("poll").map(|e| e.data),
+        Some(b"2".to_vec())
+    );
     assert_eq!(cons.poll().expect("poll").map(|e| e.data), None)
 }
 
@@ -125,14 +158,32 @@ fn can_produce_in_batches() {
 fn can_produce_incrementally() {
     env_logger::init().unwrap_or(());
     let pool = pool("can_produce_incrementally");
-    pg_queue::Producer::new(pool.clone()).expect("producer").produce(b"0").expect("produce");
-    pg_queue::Producer::new(pool.clone()).expect("producer").produce(b"1").expect("produce");
-    pg_queue::Producer::new(pool.clone()).expect("producer").produce(b"2").expect("produce");
+    pg_queue::Producer::new(pool.clone())
+        .expect("producer")
+        .produce(b"0")
+        .expect("produce");
+    pg_queue::Producer::new(pool.clone())
+        .expect("producer")
+        .produce(b"1")
+        .expect("produce");
+    pg_queue::Producer::new(pool.clone())
+        .expect("producer")
+        .produce(b"2")
+        .expect("produce");
 
     let mut cons = pg_queue::Consumer::new(pool.clone(), "default").expect("consumer");
-    assert_eq!(cons.poll().expect("poll").map(|e| e.data), Some(b"0".to_vec()));
-    assert_eq!(cons.poll().expect("poll").map(|e| e.data), Some(b"1".to_vec()));
-    assert_eq!(cons.poll().expect("poll").map(|e| e.data), Some(b"2".to_vec()));
+    assert_eq!(
+        cons.poll().expect("poll").map(|e| e.data),
+        Some(b"0".to_vec())
+    );
+    assert_eq!(
+        cons.poll().expect("poll").map(|e| e.data),
+        Some(b"1".to_vec())
+    );
+    assert_eq!(
+        cons.poll().expect("poll").map(|e| e.data),
+        Some(b"2".to_vec())
+    );
     assert_eq!(cons.poll().expect("poll").map(|e| e.data), None)
 }
 
@@ -147,7 +198,7 @@ fn can_consume_incrementally() {
 
     for expected in &[Some(b"0"), Some(b"1"), Some(b"2"), None] {
         let mut cons = pg_queue::Consumer::new(pool.clone(), "default").expect("consumer");
-        let entry =cons.poll().expect("poll");
+        let entry = cons.poll().expect("poll");
         if let Some(ref e) = entry {
             cons.commit_upto(&e).expect("commit");
         }
@@ -211,7 +262,7 @@ fn can_consume_multiply() {
 
     {
         let mut cons = pg_queue::Consumer::new(pool.clone(), "one").expect("consumer");
-        let entry =cons.poll().expect("poll");
+        let entry = cons.poll().expect("poll");
         if let Some(ref e) = entry {
             cons.commit_upto(&e).expect("commit");
         }
@@ -219,12 +270,12 @@ fn can_consume_multiply() {
     }
     {
         let mut cons = pg_queue::Consumer::new(pool.clone(), "one").expect("consumer");
-        let entry =cons.poll().expect("poll");
+        let entry = cons.poll().expect("poll");
         assert_eq!(entry.map(|e| e.data), Some(b"1".to_vec()));
     }
     {
         let mut cons = pg_queue::Consumer::new(pool.clone(), "two").expect("consumer");
-        let entry =cons.poll().expect("poll");
+        let entry = cons.poll().expect("poll");
         if let Some(ref e) = entry {
             cons.commit_upto(&e).expect("commit");
         }
@@ -232,7 +283,7 @@ fn can_consume_multiply() {
     }
     {
         let mut cons = pg_queue::Consumer::new(pool.clone(), "two").expect("consumer");
-        let entry =cons.poll().expect("poll");
+        let entry = cons.poll().expect("poll");
         assert_eq!(entry.map(|e| e.data), Some(b"1".to_vec()));
     }
 }
@@ -260,7 +311,7 @@ fn can_list_consumer_offset() {
     let entry;
     {
         let mut cons = pg_queue::Consumer::new(pool.clone(), "one").expect("consumer");
-        entry =cons.poll().expect("poll").expect("some entry");
+        entry = cons.poll().expect("poll").expect("some entry");
         cons.commit_upto(&entry).expect("commit");
     }
 
@@ -269,7 +320,6 @@ fn can_list_consumer_offset() {
     assert_eq!(offsets.len(), 1);
     assert_eq!(offsets.get("one"), Some(&entry.offset));
 }
-
 
 #[test]
 fn can_list_consumer_offsets() {
@@ -283,19 +333,19 @@ fn can_list_consumer_offsets() {
     let two;
     {
         let mut cons = pg_queue::Consumer::new(pool.clone(), "one").expect("consumer");
-        let entry =cons.poll().expect("poll").expect("some entry");
+        let entry = cons.poll().expect("poll").expect("some entry");
         cons.commit_upto(&entry).expect("commit");
     }
     {
         let mut cons = pg_queue::Consumer::new(pool.clone(), "one").expect("consumer");
-        let entry =cons.poll().expect("poll").expect("some entry");
+        let entry = cons.poll().expect("poll").expect("some entry");
         cons.commit_upto(&entry).expect("commit");
         one = entry;
     }
 
     {
         let mut cons = pg_queue::Consumer::new(pool.clone(), "two").expect("consumer");
-        let entry =cons.poll().expect("poll").expect("some entry");
+        let entry = cons.poll().expect("poll").expect("some entry");
         cons.commit_upto(&entry).expect("commit");
         two = entry;
     }
@@ -317,7 +367,7 @@ fn can_discard_entries() {
 
     {
         let mut cons = pg_queue::Consumer::new(pool.clone(), "one").expect("consumer");
-        let entry =cons.poll().expect("poll").expect("some entry");
+        let entry = cons.poll().expect("poll").expect("some entry");
         cons.commit_upto(&entry).expect("commit");
     }
 
@@ -329,7 +379,7 @@ fn can_discard_entries() {
 
     {
         let mut cons = pg_queue::Consumer::new(pool.clone(), "two").expect("consumer");
-        let entry =cons.poll().expect("poll").expect("some entry");
+        let entry = cons.poll().expect("poll").expect("some entry");
         assert_eq!(&entry.data, b"1");
     }
 }
@@ -383,7 +433,6 @@ fn can_remove_consumer_offset() {
     }
 }
 
-
 #[test]
 fn removing_non_consumer_is_noop() {
     env_logger::init().unwrap_or(());
@@ -415,7 +464,7 @@ fn can_produce_consume_with_wait() {
     let pool = pool("can_produce_consume_with_wait");
     let mut prod = pg_queue::Producer::new(pool.clone()).expect("producer");
     let mut cons = pg_queue::Consumer::new(pool.clone(), "default").expect("consumer");
-    
+
     let waiter = thread::spawn(move || {
         debug!("Awaiting");
         cons.wait_next().expect("wait")
@@ -425,6 +474,11 @@ fn can_produce_consume_with_wait() {
     debug!("Producing");
     prod.produce(b"42").expect("produce");
 
-    assert_eq!(waiter.join().map(|e| String::from_utf8_lossy(&e.data).to_string()).expect("join"),
-            "42".to_string());
+    assert_eq!(
+        waiter
+            .join()
+            .map(|e| String::from_utf8_lossy(&e.data).to_string())
+            .expect("join"),
+        "42".to_string()
+    );
 }
