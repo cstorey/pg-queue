@@ -128,7 +128,7 @@ fn can_produce_several() {
 #[test]
 fn can_produce_in_batches() {
     env_logger::init().unwrap_or(());
-    let pool = pool("can_produce_several");
+    let pool = pool("can_produce_in_batches");
     let mut prod = pg_queue::Producer::new(pool.clone()).expect("producer");
     let mut cons = pg_queue::Consumer::new(pool.clone(), "default").expect("consumer");
     {
@@ -436,7 +436,7 @@ fn can_remove_consumer_offset() {
 #[test]
 fn removing_non_consumer_is_noop() {
     env_logger::init().unwrap_or(());
-    let pool = pool("can_remove_consumer_offset");
+    let pool = pool("removing_non_consumer_is_noop");
     let mut prod = pg_queue::Producer::new(pool.clone()).expect("producer");
     prod.produce(b"0").expect("produce");
     prod.produce(b"1").expect("produce");
