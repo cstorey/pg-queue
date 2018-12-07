@@ -61,6 +61,8 @@ pub struct Producer {
 
 pub struct Batch<'a> {
     transaction: postgres::transaction::Transaction<'a>,
+    conn: &'a postgres::Connection,
+    last_id: Option<i64>,
 }
 
 impl Producer {
@@ -86,25 +88,43 @@ impl Producer {
 
     pub fn batch(&mut self) -> Result<Batch> {
         let t = try!(self.conn.transaction());
-        Ok(Batch { transaction: t })
+        Ok(Batch {
+            conn: &self.conn,
+            transaction: t,
+            last_id: None,
+        })
     }
 }
 
 impl<'a> Batch<'a> {
-    pub fn produce(&self, body: &[u8]) -> Result<()> {
+    pub fn produce(&mut self, body: &[u8]) -> Result<()> {
         let rows = try!(self.transaction.query(INSERT_ROW_SQL, &[&body]));
         for r in rows.iter() {
             let id: i64 = r.get(0);
             debug!("id: {}", id);
-            try!(self.transaction.query(SEND_NOTIFY_SQL, &[&id]));
+            self.last_id = Some(id)
         }
         debug!("Wrote: {:?}", body.len());
         Ok(())
     }
 
     pub fn commit(self) -> Result<()> {
-        try!(self.transaction.commit());
+        let Batch {
+            transaction,
+            conn,
+            last_id,
+        } = self;
+        try!(transaction.commit());
         debug!("Committed");
+        // It looks like postgres will:
+        // * Take a database scoped exclusive lock when appending notifications to the queue on commit
+        // * Continue holding that lock until the transaction overall commits.
+        // This means that WAL flushes get serialized, we can't take advantage of group commit,
+        // and write throughput tanks.
+        if let Some(id) = last_id {
+            try!(conn.query(SEND_NOTIFY_SQL, &[&id]));
+            debug!("Sent notify for id: {}", id);
+        }
         Ok(())
     }
 }

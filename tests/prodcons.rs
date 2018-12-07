@@ -132,7 +132,7 @@ fn can_produce_in_batches() {
     let mut prod = pg_queue::Producer::new(pool.clone()).expect("producer");
     let mut cons = pg_queue::Consumer::new(pool.clone(), "default").expect("consumer");
     {
-        let batch = prod.batch().expect("batch");
+        let mut batch = prod.batch().expect("batch");
         batch.produce(b"0").expect("produce");
         batch.produce(b"1").expect("produce");
         batch.produce(b"2").expect("produce");
