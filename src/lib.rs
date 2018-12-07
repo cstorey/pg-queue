@@ -70,19 +70,11 @@ impl Producer {
         let conn = try!(pool.get());
         Ok(Producer { conn: conn })
     }
-    pub fn produce(&mut self, body: &[u8]) -> Result<()> {
-        let t = try!(self.conn.transaction());
-        {
-            let rows = try!(t.query(INSERT_ROW_SQL, &[&body]));
-            for r in rows.iter() {
-                let id: i64 = r.get(0);
-                debug!("id: {}", id);
-                try!(t.query(SEND_NOTIFY_SQL, &[&id]));
-            }
-        }
-        try!(t.commit());
 
-        debug!("Wrote: {:?}", body.len());
+    pub fn produce(&mut self, body: &[u8]) -> Result<()> {
+        let mut batch = self.batch()?;
+        batch.produce(body)?;
+        batch.commit()?;
         Ok(())
     }
 
