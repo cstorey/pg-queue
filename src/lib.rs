@@ -1,13 +1,12 @@
 #[macro_use]
 extern crate log;
+extern crate failure;
 extern crate fallible_iterator;
 extern crate postgres;
 extern crate r2d2;
 extern crate r2d2_postgres;
 
-#[macro_use]
-extern crate error_chain;
-
+use failure::Error;
 use fallible_iterator::FallibleIterator;
 use r2d2::Pool;
 use r2d2_postgres::PostgresConnectionManager;
@@ -42,12 +41,7 @@ static CREATE_TABLE_SQL: &'static str = "
 
 static LISTEN: &'static str = "LISTEN logs";
 
-error_chain!{
-    foreign_links {
-        postgres::error::Error, Pg;
-        r2d2::Error, PoolError;
-    }
-}
+type Result<T> = ::std::result::Result<T, Error>;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Entry {
