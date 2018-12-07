@@ -54,9 +54,11 @@ pub fn setup<C: postgres::GenericConnection>(conn: &C) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
 pub struct Producer {
     conn: r2d2::PooledConnection<PostgresConnectionManager>,
 }
+
 pub struct Batch<'a> {
     transaction: postgres::transaction::Transaction<'a>,
 }
@@ -107,6 +109,7 @@ impl<'a> Batch<'a> {
     }
 }
 
+#[derive(Debug)]
 pub struct Consumer {
     pool: Pool<PostgresConnectionManager>,
     name: String,
