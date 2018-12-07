@@ -7,7 +7,7 @@ extern crate r2d2;
 extern crate r2d2_postgres;
 
 use r2d2::Pool;
-use r2d2_postgres::{PostgresConnectionManager, SslMode};
+use r2d2_postgres::{PostgresConnectionManager, TlsMode};
 use std::env;
 use std::thread;
 use std::time;
@@ -17,16 +17,16 @@ const DEFAULT_URL: &'static str = "postgres://postgres@localhost/";
 #[derive(Debug)]
 struct UseTempSchema(String);
 
-impl r2d2::CustomizeConnection<postgres::Connection, r2d2_postgres::Error> for UseTempSchema {
-    fn on_acquire(&self, conn: &mut postgres::Connection) -> Result<(), r2d2_postgres::Error> {
+impl r2d2::CustomizeConnection<postgres::Connection, postgres::Error> for UseTempSchema {
+    fn on_acquire(&self, conn: &mut postgres::Connection) -> Result<(), postgres::Error> {
         loop {
-            let t = try!(conn.transaction().map_err(r2d2_postgres::Error::Other));
+            let t = try!(conn.transaction().map_err(|e| e));
             let nschemas: i64 = {
                 let rows = try!(
                     t.query(
                         "SELECT count(*) from pg_catalog.pg_namespace n where n.nspname = $1",
                         &[&self.0]
-                    ).map_err(r2d2_postgres::Error::Other)
+                    ).map_err(|e| e)
                 );
                 let row = rows.get(0);
                 row.get(0)
@@ -35,10 +35,10 @@ impl r2d2::CustomizeConnection<postgres::Connection, r2d2_postgres::Error> for U
             if nschemas == 0 {
                 match t
                     .execute(&format!("CREATE SCHEMA \"{}\"", self.0), &[])
-                    .map_err(r2d2_postgres::Error::Other)
+                    .map_err(|e| e)
                 {
                     Ok(_) => {
-                        try!(t.commit().map_err(r2d2_postgres::Error::Other));
+                        try!(t.commit().map_err(|e| e));
                         break;
                     }
                     Err(e) => warn!("Error creating schema:{:?}: {:?}", self.0, e),
@@ -49,7 +49,7 @@ impl r2d2::CustomizeConnection<postgres::Connection, r2d2_postgres::Error> for U
         }
         try!(
             conn.execute(&format!("SET search_path TO \"{}\"", self.0), &[])
-                .map_err(r2d2_postgres::Error::Other)
+                .map_err(|e| e)
         );
         Ok(())
     }
@@ -58,12 +58,12 @@ impl r2d2::CustomizeConnection<postgres::Connection, r2d2_postgres::Error> for U
 fn pool(schema: &str) -> Pool<PostgresConnectionManager> {
     let url = env::var("POSTGRES_URL").unwrap_or_else(|_| DEFAULT_URL.to_string());
     debug!("Use schema name: {}", schema);
-    let config = r2d2::Config::builder()
-        .pool_size(2)
+    let manager = PostgresConnectionManager::new(&*url, TlsMode::None).expect("postgres");
+    let pool = r2d2::Pool::builder()
+        .max_size(2)
         .connection_customizer(Box::new(UseTempSchema(schema.to_string())))
-        .build();
-    let manager = PostgresConnectionManager::new(&*url, SslMode::None).expect("postgres");
-    let pool = Pool::new(config, manager).expect("pool");
+        .build(manager)
+        .expect("pool");
     let conn = pool.get().expect("temp connection");
     let t = conn.transaction().expect("begin");
     for table in &["logs", "log_consumer_positions"] {

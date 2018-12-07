@@ -1,5 +1,6 @@
 #[macro_use]
 extern crate log;
+extern crate fallible_iterator;
 extern crate postgres;
 extern crate r2d2;
 extern crate r2d2_postgres;
@@ -7,6 +8,7 @@ extern crate r2d2_postgres;
 #[macro_use]
 extern crate error_chain;
 
+use fallible_iterator::FallibleIterator;
 use r2d2::Pool;
 use r2d2_postgres::PostgresConnectionManager;
 use std::collections::{BTreeMap, VecDeque};
@@ -26,12 +28,12 @@ static FETCH_CONSUMER_POSITION: &'static str = "SELECT position FROM log_consume
 static LIST_CONSUMERS: &'static str = "SELECT name, position FROM log_consumer_positions";
 static DISCARD_CONSUMER: &'static str = "DELETE FROM log_consumer_positions WHERE name = $1";
 static CREATE_TABLE_SQL: &'static str = "
-        CREATE TABLE IF NOT EXISTS logs ( 
+        CREATE TABLE IF NOT EXISTS logs (
             id BIGSERIAL PRIMARY KEY,
             written_at TIMESTAMPTZ NOT NULL DEFAULT now() ,
             body bytea NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS log_consumer_positions ( 
+        CREATE TABLE IF NOT EXISTS log_consumer_positions (
             name TEXT PRIMARY KEY,
             position BIGINT NOT NULL
         );
@@ -43,7 +45,7 @@ static LISTEN: &'static str = "LISTEN logs";
 error_chain!{
     foreign_links {
         postgres::error::Error, Pg;
-        r2d2::GetTimeout, PoolTimeout;
+        r2d2::Error, PoolError;
     }
 }
 
@@ -62,7 +64,7 @@ pub struct Producer {
     conn: r2d2::PooledConnection<PostgresConnectionManager>,
 }
 pub struct Batch<'a> {
-    transaction: postgres::Transaction<'a>,
+    transaction: postgres::transaction::Transaction<'a>,
 }
 
 impl Producer {
@@ -176,14 +178,14 @@ impl Consumer {
         try!(listen.execute(&[]));
         loop {
             let notifications = conn.notifications();
-            while let Some(n) = notifications.iter().next() {
+            while let Some(n) = notifications.iter().next()? {
                 debug!("Saw previous notification: {:?}", n);
             }
             if let Some(entry) = try!(self.poll_item(&conn)) {
                 return Ok(entry);
             }
             debug!("Awaiting notifications");
-            if let Some(n) = notifications.blocking_iter().next() {
+            if let Some(n) = notifications.blocking_iter().next()? {
                 debug!("Saw new notification:{:?}", n);
             }
         }
