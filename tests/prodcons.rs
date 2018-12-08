@@ -289,6 +289,59 @@ fn can_consume_multiply() {
 }
 
 #[test]
+#[ignore]
+fn producing_concurrently_should_never_leave_holes() {
+    env_logger::init().unwrap_or(());
+
+    let pool = pool("producing_concurrently_should_never_leave_holes");
+    let mut prod1 = pg_queue::Producer::new(pool.clone()).expect("producer");
+    let mut b1 = prod1.batch().expect("batch b1");
+    b1.produce(b"first").expect("produce 1");
+
+    {
+        let mut prod2 = pg_queue::Producer::new(pool.clone()).expect("producer");
+        let mut b2 = prod2.batch().expect("batch b2");
+        b2.produce(b"second").expect("produce 2");
+        b2.commit().expect("commit b1");
+    }
+
+    let observations_a = {
+        let mut observations = Vec::new();
+        let mut cons = pg_queue::Consumer::new(pool.clone(), "a").expect("consumer");
+        while let Some(entry) = cons.poll().expect("poll") {
+            observations.push(String::from_utf8_lossy(&entry.data).into_owned());
+        }
+        observations
+    };
+
+    b1.commit().expect("commit b1");
+
+    let observations_b = {
+        let mut observations = Vec::new();
+        let mut cons = pg_queue::Consumer::new(pool.clone(), "b").expect("consumer");
+        while let Some(entry) = cons.poll().expect("poll") {
+            observations.push(String::from_utf8_lossy(&entry.data).into_owned());
+        }
+        observations
+    };
+
+    println!("observations_a: {:?}", observations_a);
+    println!("observations_b: {:?}", observations_b);
+
+    // assert observations_a is a prefix of observations_b
+    let prefix_b = observations_b
+        .iter()
+        .cloned()
+        .take(observations_a.len())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        observations_a, prefix_b,
+        "{:?} is prefix of {:?} ({:?})",
+        observations_a, observations_b, prefix_b
+    );
+}
+
+#[test]
 fn can_list_zero_consumer_offsets() {
     env_logger::init().unwrap_or(());
     let pool = pool("can_list_zero_consumer_offsets");
