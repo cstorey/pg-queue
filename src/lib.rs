@@ -119,6 +119,14 @@ impl<'a> Batch<'a> {
         }
         Ok(())
     }
+
+    pub fn rollback(self) -> Result<()> {
+        let Batch { transaction, .. } = self;
+        transaction.set_rollback();
+        try!(transaction.finish());
+        debug!("Rolled back");
+        Ok(())
+    }
 }
 
 #[derive(Debug)]

@@ -155,6 +155,23 @@ fn can_produce_in_batches() {
 }
 
 #[test]
+fn can_rollback_batches() {
+    env_logger::init().unwrap_or(());
+    let pool = pool("can_rollback_batches");
+    let mut prod = pg_queue::Producer::new(pool.clone()).expect("producer");
+    let mut cons = pg_queue::Consumer::new(pool.clone(), "default").expect("consumer");
+    {
+        let mut batch = prod.batch().expect("batch");
+        batch.produce(b"0").expect("produce");
+        batch.produce(b"1").expect("produce");
+        batch.produce(b"2").expect("produce");
+        batch.rollback().expect("rollback");
+    }
+
+    assert_eq!(cons.poll().expect("poll").map(|e| e.data), None,);
+}
+
+#[test]
 fn can_produce_incrementally() {
     env_logger::init().unwrap_or(());
     let pool = pool("can_produce_incrementally");
