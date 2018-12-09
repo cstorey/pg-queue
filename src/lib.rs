@@ -79,7 +79,7 @@ pub struct Producer {
 pub struct Batch<'a> {
     transaction: postgres::transaction::Transaction<'a>,
     conn: &'a postgres::Connection,
-    last_id: Option<Version>,
+    last_version: Option<Version>,
 }
 
 impl Producer {
@@ -100,7 +100,7 @@ impl Producer {
         Ok(Batch {
             conn: &self.conn,
             transaction: t,
-            last_id: None,
+            last_version: None,
         })
     }
 }
@@ -116,7 +116,7 @@ impl<'a> Batch<'a> {
             .ok_or_else(|| failure::err_msg("insert returned no rows?"))?;
 
         debug!("id: {:?}", id);
-        self.last_id = Some(id);
+        self.last_version = Some(id);
         debug!("Wrote: {:?}", body.len());
         Ok(())
     }
@@ -125,7 +125,7 @@ impl<'a> Batch<'a> {
         let Batch {
             transaction,
             conn,
-            last_id,
+            last_version,
         } = self;
         try!(transaction.commit());
         debug!("Committed");
@@ -134,7 +134,7 @@ impl<'a> Batch<'a> {
         // * Continue holding that lock until the transaction overall commits.
         // This means that WAL flushes get serialized, we can't take advantage of group commit,
         // and write throughput tanks.
-        if let Some(id) = last_id {
+        if let Some(id) = last_version {
             try!(conn.query(SEND_NOTIFY_SQL, &[&id.offset]));
             debug!("Sent notify for id: {:?}", id);
         }
