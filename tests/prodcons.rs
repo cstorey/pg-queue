@@ -126,6 +126,19 @@ fn can_produce_several() {
 }
 
 #[test]
+fn can_produce_ordered() {
+    env_logger::init().unwrap_or(());
+    let pool = pool("can_produce_ordered");
+    let mut prod = pg_queue::Producer::new(pool.clone()).expect("producer");
+    let v0 = prod.produce(b"0").expect("produce");
+    let v1 = prod.produce(b"1").expect("produce");
+    let v2 = prod.produce(b"2").expect("produce");
+
+    assert!(v0 < v1, "{:?} < {:?}", v0, v1);
+    assert!(v1 < v2, "{:?} < {:?}", v1, v2);
+}
+
+#[test]
 fn can_produce_in_batches() {
     env_logger::init().unwrap_or(());
     let pool = pool("can_produce_in_batches");

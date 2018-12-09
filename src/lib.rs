@@ -88,11 +88,11 @@ impl Producer {
         Ok(Producer { conn: conn })
     }
 
-    pub fn produce(&mut self, body: &[u8]) -> Result<()> {
+    pub fn produce(&mut self, body: &[u8]) -> Result<Version> {
         let mut batch = self.batch()?;
-        batch.produce(body)?;
+        let version = batch.produce(body)?;
         batch.commit()?;
-        Ok(())
+        Ok(version)
     }
 
     pub fn batch(&mut self) -> Result<Batch> {
@@ -106,7 +106,7 @@ impl Producer {
 }
 
 impl<'a> Batch<'a> {
-    pub fn produce(&mut self, body: &[u8]) -> Result<()> {
+    pub fn produce(&mut self, body: &[u8]) -> Result<Version> {
         let rows = try!(self.transaction.query(INSERT_ROW_SQL, &[&body]));
         let id = rows
             .iter()
@@ -118,7 +118,7 @@ impl<'a> Batch<'a> {
         debug!("id: {:?}", id);
         self.last_version = Some(id);
         debug!("Wrote: {:?}", body.len());
-        Ok(())
+        Ok(id)
     }
 
     pub fn commit(self) -> Result<()> {
