@@ -1,5 +1,6 @@
 #[macro_use]
 extern crate log;
+#[macro_use]
 extern crate failure;
 extern crate fallible_iterator;
 extern crate postgres;
@@ -11,13 +12,24 @@ use fallible_iterator::FallibleIterator;
 use r2d2::Pool;
 use r2d2_postgres::PostgresConnectionManager;
 use std::collections::{BTreeMap, VecDeque};
+use std::time;
 
 const LIMIT_BUFFER: i64 = 1024;
 
 static INSERT_ROW_SQL: &'static str = "INSERT INTO logs (body) values($1) RETURNING tx_id, id";
 static SEND_NOTIFY_SQL: &'static str = "SELECT pg_notify('logs', $1 :: text)";
-static FETCH_NEXT_ROW: &'static str =
-    "SELECT tx_id, id, body FROM logs WHERE (tx_id, id) > ($1, $2) LIMIT $3";
+static FETCH_NEXT_ROW: &'static str = "\
+    SELECT tx_id, id, body
+    FROM logs
+    WHERE (tx_id, id) > ($1, $2)
+    AND tx_id < txid_snapshot_xmin(txid_current_snapshot())
+    LIMIT $3";
+static IS_VISIBLE: &'static str = "\
+    WITH snapshot as (
+        select txid_snapshot_xmin(txid_current_snapshot()) as xmin,
+        txid_current() as current
+    )
+    SELECT $1 < xmin, xmin, current FROM snapshot";
 static DISCARD_ENTRIES: &'static str = "DELETE FROM logs WHERE (tx_id, id) <= ($1, $2)";
 
 static UPSERT_CONSUMER_OFFSET: &'static str =
@@ -229,6 +241,51 @@ impl Consumer {
                 debug!("Saw new notification:{:?}", n);
             }
         }
+    }
+
+    pub fn wait_until_visible(&self, version: Version, timeout: time::Duration) -> Result<()> {
+        let deadline = time::Instant::now() + timeout;
+        let conn = self.pool.get()?;
+        let listen = conn.prepare_cached(LISTEN)?;
+        listen.execute(&[])?;
+        for backoff in 0..64 {
+            trace!("Checking for visibility of: {:?}", version,);
+            let (is_visible, txmin, tx_current) = conn
+                .query(IS_VISIBLE, &[&version.tx_id])?
+                .into_iter()
+                .next()
+                .map(|r| (r.get::<_, bool>(0), r.get::<_, i64>(1), r.get::<_, i64>(2)))
+                .ok_or_else(|| failure::err_msg("txn version comparison returned no rows?"))?;
+            trace!(
+                "Visibility check: is_visible:{:?}; xmin:{:?}; current: {:?}",
+                is_visible,
+                txmin,
+                tx_current
+            );
+
+            let now = time::Instant::now();
+
+            if is_visible {
+                break;
+            }
+
+            if now > deadline {
+                bail!("Item was not visible before deadline: {:?}", version);
+            }
+
+            let remaining = deadline - now;
+            let backoff = time::Duration::from_millis((2u64).pow(backoff));
+            let sleep = std::cmp::min(remaining, backoff);
+            trace!(
+                "remaining: {:?}; backoff: {:?}; Pause for: {:?}",
+                remaining,
+                sleep,
+                sleep
+            );
+            std::thread::sleep(sleep);
+        }
+
+        Ok(())
     }
 
     pub fn commit_upto(&self, entry: &Entry) -> Result<()> {
