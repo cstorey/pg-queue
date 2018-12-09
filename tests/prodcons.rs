@@ -226,14 +226,17 @@ fn can_consume_incrementally() {
     prod.produce(b"1").expect("produce");
     prod.produce(b"2").expect("produce");
 
-    for expected in &[Some(b"0"), Some(b"1"), Some(b"2"), None] {
+    let mut observations = Vec::new();
+    let expected = &["0", "1", "2"];
+    for _ in expected.iter() {
         let mut cons = pg_queue::Consumer::new(pool.clone(), "default").expect("consumer");
         let entry = cons.poll().expect("poll");
         if let Some(ref e) = entry {
             cons.commit_upto(&e).expect("commit");
+            observations.push(String::from_utf8_lossy(&e.data).into_owned());
         }
-        assert_eq!(entry.map(|e| e.data), expected.map(|v| v.to_vec()));
     }
+    assert_eq!(&observations, expected);
 }
 
 #[test]
