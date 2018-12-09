@@ -16,7 +16,7 @@ const LIMIT_BUFFER: i64 = 1024;
 
 static INSERT_ROW_SQL: &'static str = "INSERT INTO logs (body) values($1) RETURNING id";
 static SEND_NOTIFY_SQL: &'static str = "SELECT pg_notify('logs', $1 :: bigint :: text)";
-static FETCH_NEXT_ROW: &'static str = "SELECT id, body FROM logs WHERE logs.id > $1 LIMIT $2";
+static FETCH_NEXT_ROW: &'static str = "SELECT id, body FROM logs WHERE id > $1 LIMIT $2";
 static DISCARD_ENTRIES: &'static str = "DELETE FROM logs WHERE id <= $1";
 
 static UPSERT_CONSUMER_OFFSET: &'static str = "INSERT INTO log_consumer_positions (name, \
@@ -73,6 +73,7 @@ pub struct Producer {
 }
 
 pub struct Batch<'a> {
+    transaction: postgres::transaction::Transaction<'a>,
     conn: &'a postgres::Connection,
     last_id: Option<i64>,
 }
@@ -91,8 +92,10 @@ impl Producer {
     }
 
     pub fn batch(&mut self) -> Result<Batch> {
+        let t = try!(self.conn.transaction());
         Ok(Batch {
             conn: &self.conn,
+            transaction: t,
             last_id: None,
         })
     }
@@ -100,7 +103,7 @@ impl Producer {
 
 impl<'a> Batch<'a> {
     pub fn produce(&mut self, body: &[u8]) -> Result<()> {
-        let rows = try!(self.conn.query(INSERT_ROW_SQL, &[&body]));
+        let rows = try!(self.transaction.query(INSERT_ROW_SQL, &[&body]));
         for r in rows.iter() {
             let id: i64 = r.get(0);
             debug!("id: {}", id);
@@ -111,17 +114,30 @@ impl<'a> Batch<'a> {
     }
 
     pub fn commit(self) -> Result<()> {
-        let Batch { conn, last_id } = self;
+        let Batch {
+            transaction,
+            conn,
+            last_id,
+        } = self;
+        try!(transaction.commit());
+        debug!("Committed");
         // It looks like postgres will:
         // * Take a database scoped exclusive lock when appending notifications to the queue on commit
         // * Continue holding that lock until the transaction overall commits.
         // This means that WAL flushes get serialized, we can't take advantage of group commit,
         // and write throughput tanks.
-        // Hence we do this in a separate transaction.
         if let Some(id) = last_id {
             try!(conn.query(SEND_NOTIFY_SQL, &[&id]));
             debug!("Sent notify for id: {}", id);
         }
+        Ok(())
+    }
+
+    pub fn rollback(self) -> Result<()> {
+        let Batch { transaction, .. } = self;
+        transaction.set_rollback();
+        try!(transaction.finish());
+        debug!("Rolled back");
         Ok(())
     }
 }
