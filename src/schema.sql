@@ -20,4 +20,17 @@ DO $$
             ALTER TABLE logs ADD COLUMN tx_id BIGINT DEFAULT txid_current();
         END IF;
     END
-$$
+$$;
+
+DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT true FROM pg_attribute
+            WHERE attrelid = 'log_consumer_positions'::regclass
+            AND attname = 'tx_position'
+            AND NOT attisdropped
+        ) THEN
+            ALTER TABLE log_consumer_positions ADD COLUMN tx_position BIGINT NOT NULL;
+        END IF;
+    END
+$$;

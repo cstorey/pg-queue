@@ -14,17 +14,21 @@ use std::collections::{BTreeMap, VecDeque};
 
 const LIMIT_BUFFER: i64 = 1024;
 
-static INSERT_ROW_SQL: &'static str = "INSERT INTO logs (body) values($1) RETURNING id";
+static INSERT_ROW_SQL: &'static str = "INSERT INTO logs (body) values($1) RETURNING tx_id, id";
 static SEND_NOTIFY_SQL: &'static str = "SELECT pg_notify('logs', $1 :: text)";
-static FETCH_NEXT_ROW: &'static str = "SELECT id, body FROM logs WHERE id > $1 LIMIT $2";
-static DISCARD_ENTRIES: &'static str = "DELETE FROM logs WHERE id <= $1";
+static FETCH_NEXT_ROW: &'static str =
+    "SELECT tx_id, id, body FROM logs WHERE (tx_id, id) > ($1, $2) LIMIT $3";
+static DISCARD_ENTRIES: &'static str = "DELETE FROM logs WHERE (tx_id, id) <= ($1, $2)";
 
-static UPSERT_CONSUMER_OFFSET: &'static str = "INSERT INTO log_consumer_positions (name, \
-                                               position) values ($1, $2) ON CONFLICT (name) DO \
-                                               UPDATE SET position = EXCLUDED.position";
-static FETCH_CONSUMER_POSITION: &'static str = "SELECT position FROM log_consumer_positions WHERE \
-                                                name = $1";
-static LIST_CONSUMERS: &'static str = "SELECT name, position FROM log_consumer_positions";
+static UPSERT_CONSUMER_OFFSET: &'static str =
+    "INSERT INTO log_consumer_positions (name, \
+     tx_position, position) values ($1, $2, $3) ON CONFLICT (name) DO \
+     UPDATE SET tx_position = EXCLUDED.tx_position, position = EXCLUDED.position";
+static FETCH_CONSUMER_POSITION: &'static str =
+    "SELECT tx_position, position FROM log_consumer_positions WHERE \
+     name = $1";
+static LIST_CONSUMERS: &'static str =
+    "SELECT name, tx_position, position FROM log_consumer_positions";
 static DISCARD_CONSUMER: &'static str = "DELETE FROM log_consumer_positions WHERE name = $1";
 static CREATE_TABLE_SQL: &'static str = include_str!("schema.sql");
 
@@ -33,7 +37,8 @@ static LISTEN: &'static str = "LISTEN logs";
 type Result<T> = ::std::result::Result<T, Error>;
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Version {
-    offset: i64,
+    tx_id: i64,
+    seq: i64,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -87,7 +92,8 @@ impl<'a> Batch<'a> {
         let id = rows
             .iter()
             .map(|r| Version {
-                offset: r.get::<_, i64>(0),
+                tx_id: r.get::<_, i64>(0),
+                seq: r.get::<_, i64>(1),
             }).next()
             .ok_or_else(|| failure::err_msg("insert returned no rows?"))?;
 
@@ -112,7 +118,7 @@ impl<'a> Batch<'a> {
         // and write throughput tanks.
         if let Some(id) = last_version {
             // We never actually parse the version, it's just a nice to have.
-            let vers = format!("{}", id.offset);
+            let vers = format!("{}", id.seq);
             try!(conn.query(SEND_NOTIFY_SQL, &[&vers]));
             debug!("Sent notify for id: {:?}", id);
         }
@@ -146,8 +152,14 @@ impl Consumer {
         let position = rows
             .iter()
             .next()
-            .map(|r| Version { offset: r.get(0) })
-            .unwrap_or(Version { offset: -1i64 });
+            .map(|r| Version {
+                tx_id: r.get(0),
+                seq: r.get(1),
+            }).unwrap_or(Version {
+                tx_id: 0,
+                seq: -1i64,
+            });
+        trace!("Loaded position for consumer {:?}: {:?}", name, position);
         Ok(Consumer {
             pool: pool,
             name: name.to_string(),
@@ -170,17 +182,25 @@ impl Consumer {
 
         let t = try!(conn.transaction());
         let next_row = try!(t.prepare_cached(FETCH_NEXT_ROW));
-        let rows = try!(next_row.query(&[&self.last_seen_offset.offset, &LIMIT_BUFFER]));
+        let rows = try!(next_row.query(&[
+            &self.last_seen_offset.tx_id,
+            &self.last_seen_offset.seq,
+            &LIMIT_BUFFER
+        ]));
         debug!("next rows:{:?}", rows.len());
         for r in rows.iter() {
-            let id = Version { offset: r.get(0) };
-            let body: Vec<u8> = r.get(1);
+            let id = Version {
+                tx_id: r.get(0),
+                seq: r.get(1),
+            };
+            let body: Vec<u8> = r.get(2);
             debug!("buffering id: {:?}", id);
             self.buf.push_back(Entry {
                 version: id,
                 data: body,
             })
         }
+        t.commit()?;
 
         if let Some(res) = self.buf.pop_front() {
             self.last_seen_offset = res.version;
@@ -215,8 +235,13 @@ impl Consumer {
         let conn = try!(self.pool.get());
         let t = try!(conn.transaction());
         let upsert = try!(t.prepare_cached(UPSERT_CONSUMER_OFFSET));
-        try!(upsert.execute(&[&self.name, &entry.version.offset]));
+        try!(upsert.execute(&[&self.name, &entry.version.tx_id, &entry.version.seq]));
         try!(t.commit());
+        trace!(
+            "Persisted position for consumer {:?}: {:?}",
+            self.name,
+            entry.version
+        );
         Ok(())
     }
 
@@ -224,7 +249,7 @@ impl Consumer {
         let conn = try!(self.pool.get());
         let t = try!(conn.transaction());
         let discard = try!(t.prepare_cached(DISCARD_ENTRIES));
-        try!(discard.execute(&[&limit.offset]));
+        try!(discard.execute(&[&limit.tx_id, &limit.seq]));
         try!(t.commit());
         Ok(())
     }
@@ -236,8 +261,15 @@ impl Consumer {
 
         Ok(rows
             .iter()
-            .map(|r| (r.get(0), Version { offset: r.get(1) }))
-            .collect())
+            .map(|r| {
+                (
+                    r.get(0),
+                    Version {
+                        tx_id: r.get(1),
+                        seq: r.get(2),
+                    },
+                )
+            }).collect())
     }
     pub fn clear_offset(&mut self) -> Result<()> {
         let conn = try!(self.pool.get());

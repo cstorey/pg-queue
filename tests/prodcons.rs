@@ -219,13 +219,18 @@ fn can_consume_incrementally() {
     prod.produce(b"0").expect("produce");
     prod.produce(b"1").expect("produce");
     prod.produce(b"2").expect("produce");
+    prod.produce(b"3").expect("produce");
+    prod.produce(b"4").expect("produce");
 
     let mut observations = Vec::new();
-    let expected = &["0", "1", "2"];
-    for _ in expected.iter() {
+    let expected = &["0", "1", "2", "3", "4"];
+    for i in 0..expected.len() {
+        debug!("Creating consumer iteration {}", i);
         let mut cons = pg_queue::Consumer::new(pool.clone(), "default").expect("consumer");
+        debug!("Consuming on iteration {}", i);
         let entry = cons.poll().expect("poll");
         if let Some(ref e) = entry {
+            debug!("Got item: {:?}", e);
             cons.commit_upto(&e).expect("commit");
             observations.push(String::from_utf8_lossy(&e.data).into_owned());
         }
