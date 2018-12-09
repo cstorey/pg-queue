@@ -8,6 +8,7 @@ extern crate r2d2_postgres;
 
 use r2d2::Pool;
 use r2d2_postgres::{PostgresConnectionManager, TlsMode};
+use std::collections::BTreeMap;
 use std::env;
 use std::thread;
 use std::time;
@@ -408,32 +409,28 @@ fn can_list_consumer_offsets() {
     prod.produce(b"0").expect("produce");
     prod.produce(b"1").expect("produce");
 
-    let one;
-    let two;
-    {
+    let one = {
         let mut cons = pg_queue::Consumer::new(pool.clone(), "one").expect("consumer");
         let entry = cons.poll().expect("poll").expect("some entry");
         cons.commit_upto(&entry).expect("commit");
-    }
-    {
-        let mut cons = pg_queue::Consumer::new(pool.clone(), "one").expect("consumer");
-        let entry = cons.poll().expect("poll").expect("some entry");
-        cons.commit_upto(&entry).expect("commit");
-        one = entry;
-    }
+        entry
+    };
 
-    {
+    let two = {
         let mut cons = pg_queue::Consumer::new(pool.clone(), "two").expect("consumer");
+        let _ = cons.poll().expect("poll").expect("some entry");
         let entry = cons.poll().expect("poll").expect("some entry");
         cons.commit_upto(&entry).expect("commit");
-        two = entry;
-    }
+        entry
+    };
+
+    let mut expected = BTreeMap::new();
+    expected.insert("one".to_string(), one.version);
+    expected.insert("two".to_string(), two.version);
 
     let cons = pg_queue::Consumer::new(pool.clone(), "two").expect("consumer");
-    let offsets = cons.consumers().expect("iter");
-    assert_eq!(offsets.len(), 2);
-    assert_eq!(offsets.get("one"), Some(&one.version));
-    assert_eq!(offsets.get("two"), Some(&two.version));
+    let offsets = cons.consumers().expect("consumers");
+    assert_eq!(offsets, expected);
 }
 
 #[test]
