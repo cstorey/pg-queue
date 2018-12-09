@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, VecDeque};
 const LIMIT_BUFFER: i64 = 1024;
 
 static INSERT_ROW_SQL: &'static str = "INSERT INTO logs (body) values($1) RETURNING id";
-static SEND_NOTIFY_SQL: &'static str = "SELECT pg_notify('logs', $1 :: bigint :: text)";
+static SEND_NOTIFY_SQL: &'static str = "SELECT pg_notify('logs', $1 :: text)";
 static FETCH_NEXT_ROW: &'static str = "SELECT id, body FROM logs WHERE id > $1 LIMIT $2";
 static DISCARD_ENTRIES: &'static str = "DELETE FROM logs WHERE id <= $1";
 
@@ -135,7 +135,9 @@ impl<'a> Batch<'a> {
         // This means that WAL flushes get serialized, we can't take advantage of group commit,
         // and write throughput tanks.
         if let Some(id) = last_version {
-            try!(conn.query(SEND_NOTIFY_SQL, &[&id.offset]));
+            // We never actually parse the version, it's just a nice to have.
+            let vers = format!("{}", id.offset);
+            try!(conn.query(SEND_NOTIFY_SQL, &[&vers]));
             debug!("Sent notify for id: {:?}", id);
         }
         Ok(())
