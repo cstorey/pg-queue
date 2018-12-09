@@ -108,11 +108,14 @@ impl Producer {
 impl<'a> Batch<'a> {
     pub fn produce(&mut self, body: &[u8]) -> Result<()> {
         let rows = try!(self.transaction.query(INSERT_ROW_SQL, &[&body]));
-        for r in rows.iter() {
-            let id: i64 = r.get(0);
-            debug!("id: {}", id);
-            self.last_id = Some(id)
-        }
+        let id = rows
+            .iter()
+            .map(|r| r.get::<_, i64>(0))
+            .next()
+            .ok_or_else(|| failure::err_msg("insert returned no rows?"))?;
+
+        debug!("id: {}", id);
+        self.last_id = Some(id);
         debug!("Wrote: {:?}", body.len());
         Ok(())
     }
