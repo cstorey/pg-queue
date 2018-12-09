@@ -55,10 +55,14 @@ static CREATE_TABLE_SQL: &'static str = "
 static LISTEN: &'static str = "LISTEN logs";
 
 type Result<T> = ::std::result::Result<T, Error>;
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
+pub struct Version {
+    offset: i64,
+}
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Entry {
-    pub offset: i64,
+    pub version: Version,
     pub data: Vec<u8>,
 }
 
@@ -146,7 +150,7 @@ impl<'a> Batch<'a> {
 pub struct Consumer {
     pool: Pool<PostgresConnectionManager>,
     name: String,
-    last_seen_offset: i64,
+    last_seen_offset: Version,
     buf: VecDeque<Entry>,
 }
 
@@ -157,7 +161,11 @@ impl Consumer {
         let stmt = try!(t.prepare_cached(FETCH_CONSUMER_POSITION));
         let rows = try!(stmt.query(&[&name]));
         debug!("next rows:{:?}", rows.len());
-        let position = rows.iter().next().map(|r| r.get(0)).unwrap_or(-1i64);
+        let position = rows
+            .iter()
+            .next()
+            .map(|r| Version { offset: r.get(0) })
+            .unwrap_or(Version { offset: -1i64 });
         Ok(Consumer {
             pool: pool,
             name: name.to_string(),
@@ -174,26 +182,26 @@ impl Consumer {
     fn poll_item(&mut self, conn: &postgres::Connection) -> Result<Option<Entry>> {
         if let Some(entry) = self.buf.pop_front() {
             trace!("returning (from buffer): {:?}", entry);
-            self.last_seen_offset = entry.offset;
+            self.last_seen_offset = entry.version;
             return Ok(Some(entry));
         }
 
         let t = try!(conn.transaction());
         let next_row = try!(t.prepare_cached(FETCH_NEXT_ROW));
-        let rows = try!(next_row.query(&[&self.last_seen_offset, &LIMIT_BUFFER]));
+        let rows = try!(next_row.query(&[&self.last_seen_offset.offset, &LIMIT_BUFFER]));
         debug!("next rows:{:?}", rows.len());
         for r in rows.iter() {
-            let id: i64 = r.get(0);
+            let id = Version { offset: r.get(0) };
             let body: Vec<u8> = r.get(1);
-            debug!("buffering id: {}", id);
+            debug!("buffering id: {:?}", id);
             self.buf.push_back(Entry {
-                offset: id,
+                version: id,
                 data: body,
             })
         }
 
         if let Some(res) = self.buf.pop_front() {
-            self.last_seen_offset = res.offset;
+            self.last_seen_offset = res.version;
             trace!("returning (from db): {:?}", res);
             Ok(Some(res))
         } else {
@@ -225,26 +233,29 @@ impl Consumer {
         let conn = try!(self.pool.get());
         let t = try!(conn.transaction());
         let upsert = try!(t.prepare_cached(UPSERT_CONSUMER_OFFSET));
-        try!(upsert.execute(&[&self.name, &entry.offset]));
+        try!(upsert.execute(&[&self.name, &entry.version.offset]));
         try!(t.commit());
         Ok(())
     }
 
-    pub fn discard_upto(&self, limit: i64) -> Result<()> {
+    pub fn discard_upto(&self, limit: Version) -> Result<()> {
         let conn = try!(self.pool.get());
         let t = try!(conn.transaction());
         let discard = try!(t.prepare_cached(DISCARD_ENTRIES));
-        try!(discard.execute(&[&limit]));
+        try!(discard.execute(&[&limit.offset]));
         try!(t.commit());
         Ok(())
     }
-    pub fn consumers(&self) -> Result<BTreeMap<String, i64>> {
+    pub fn consumers(&self) -> Result<BTreeMap<String, Version>> {
         let conn = try!(self.pool.get());
         let t = try!(conn.transaction());
         let list = try!(t.prepare_cached(LIST_CONSUMERS));
         let rows = try!(list.query(&[]));
 
-        Ok(rows.iter().map(|r| (r.get(0), r.get(1))).collect())
+        Ok(rows
+            .iter()
+            .map(|r| (r.get(0), Version { offset: r.get(1) }))
+            .collect())
     }
     pub fn clear_offset(&mut self) -> Result<()> {
         let conn = try!(self.pool.get());

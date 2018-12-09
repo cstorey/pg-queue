@@ -388,7 +388,7 @@ fn can_list_consumer_offset() {
     let cons = pg_queue::Consumer::new(pool.clone(), "one").expect("consumer");
     let offsets = cons.consumers().expect("iter");
     assert_eq!(offsets.len(), 1);
-    assert_eq!(offsets.get("one"), Some(&entry.offset));
+    assert_eq!(offsets.get("one"), Some(&entry.version));
 }
 
 #[test]
@@ -423,8 +423,8 @@ fn can_list_consumer_offsets() {
     let cons = pg_queue::Consumer::new(pool.clone(), "two").expect("consumer");
     let offsets = cons.consumers().expect("iter");
     assert_eq!(offsets.len(), 2);
-    assert_eq!(offsets.get("one"), Some(&one.offset));
-    assert_eq!(offsets.get("two"), Some(&two.offset));
+    assert_eq!(offsets.get("one"), Some(&one.version));
+    assert_eq!(offsets.get("two"), Some(&two.version));
 }
 
 #[test]
@@ -460,7 +460,8 @@ fn can_discard_on_empty() {
     let pool = pool("can_discard_on_empty");
     {
         let cons = pg_queue::Consumer::new(pool.clone(), "cleaner").expect("consumer");
-        cons.discard_upto(42).expect("discard");
+        cons.discard_upto(pg_queue::Version::default())
+            .expect("discard");
     }
 }
 
@@ -473,7 +474,8 @@ fn can_discard_after_written() {
 
     {
         let cons = pg_queue::Consumer::new(pool.clone(), "cleaner").expect("consumer");
-        cons.discard_upto(42).expect("discard");
+        cons.discard_upto(pg_queue::Version::default())
+            .expect("discard");
     }
 }
 
