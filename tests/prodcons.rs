@@ -202,19 +202,12 @@ fn can_produce_incrementally() {
         .expect("produce");
 
     let mut cons = pg_queue::Consumer::new(pool.clone(), "default").expect("consumer");
-    assert_eq!(
-        cons.poll().expect("poll").map(|e| e.data),
-        Some(b"0".to_vec())
-    );
-    assert_eq!(
-        cons.poll().expect("poll").map(|e| e.data),
-        Some(b"1".to_vec())
-    );
-    assert_eq!(
-        cons.poll().expect("poll").map(|e| e.data),
-        Some(b"2".to_vec())
-    );
-    assert_eq!(cons.poll().expect("poll").map(|e| e.data), None)
+    let mut observations = Vec::new();
+    while let Some(e) = cons.poll().expect("poll") {
+        observations.push(String::from_utf8_lossy(&e.data).into_owned())
+    }
+
+    assert_eq!(&observations, &["0", "1", "2"])
 }
 
 #[test]
