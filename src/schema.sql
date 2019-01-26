@@ -30,7 +30,7 @@ DO $$
             AND attname = 'tx_position'
             AND NOT attisdropped
         ) THEN
-            ALTER TABLE log_consumer_positions ADD COLUMN tx_position BIGINT NOT NULL;
+            ALTER TABLE log_consumer_positions ADD COLUMN tx_position BIGINT NOT NULL DEFAULT 0;
         END IF;
     END
 $$;
