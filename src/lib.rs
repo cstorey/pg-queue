@@ -49,8 +49,8 @@ static LISTEN: &'static str = "LISTEN logs";
 type Result<T> = ::std::result::Result<T, Error>;
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Version {
-    tx_id: i64,
-    seq: i64,
+    pub tx_id: i64,
+    pub seq: i64,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
