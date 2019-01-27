@@ -22,6 +22,8 @@ DO $$
     END
 $$;
 
+CREATE INDEX IF NOT EXISTS logs_offset_idx ON logs(tx_id, id);
+
 DO $$
     BEGIN
         IF NOT EXISTS (
