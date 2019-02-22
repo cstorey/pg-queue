@@ -16,10 +16,11 @@ use std::time;
 
 const LIMIT_BUFFER: i64 = 1024;
 
-static INSERT_ROW_SQL: &'static str = "INSERT INTO logs (body) values($1) RETURNING tx_id, id";
+static INSERT_ROW_SQL: &'static str =
+    "INSERT INTO logs (key, body) values($1, $2) RETURNING tx_id, id";
 static SEND_NOTIFY_SQL: &'static str = "SELECT pg_notify('logs', $1 :: text)";
 static FETCH_NEXT_ROW: &'static str = "\
-    SELECT tx_id, id, body
+    SELECT tx_id, id, key, body
     FROM logs
     WHERE (tx_id, id) > ($1, $2)
     AND tx_id < txid_snapshot_xmin(txid_current_snapshot())
@@ -56,6 +57,7 @@ pub struct Version {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Entry {
     pub version: Version,
+    pub key: Vec<u8>,
     pub data: Vec<u8>,
 }
 
@@ -81,9 +83,9 @@ impl Producer {
         Ok(Producer { conn: conn })
     }
 
-    pub fn produce(&mut self, body: &[u8]) -> Result<Version> {
+    pub fn produce(&mut self, key: &[u8], body: &[u8]) -> Result<Version> {
         let mut batch = self.batch()?;
-        let version = batch.produce(body)?;
+        let version = batch.produce(key, body)?;
         batch.commit()?;
         Ok(version)
     }
@@ -99,14 +101,15 @@ impl Producer {
 }
 
 impl<'a> Batch<'a> {
-    pub fn produce(&mut self, body: &[u8]) -> Result<Version> {
-        let rows = try!(self.transaction.query(INSERT_ROW_SQL, &[&body]));
+    pub fn produce(&mut self, key: &[u8], body: &[u8]) -> Result<Version> {
+        let rows = try!(self.transaction.query(INSERT_ROW_SQL, &[&key, &body]));
         let id = rows
             .iter()
             .map(|r| Version {
                 tx_id: r.get::<_, i64>(0),
                 seq: r.get::<_, i64>(1),
-            }).next()
+            })
+            .next()
             .ok_or_else(|| failure::err_msg("insert returned no rows?"))?;
 
         debug!("id: {:?}", id);
@@ -167,7 +170,8 @@ impl Consumer {
             .map(|r| Version {
                 tx_id: r.get(0),
                 seq: r.get(1),
-            }).unwrap_or(Version {
+            })
+            .unwrap_or(Version {
                 tx_id: 0,
                 seq: -1i64,
             });
@@ -205,10 +209,12 @@ impl Consumer {
                 tx_id: r.get(0),
                 seq: r.get(1),
             };
-            let body: Vec<u8> = r.get(2);
+            let key: Vec<u8> = r.get(2);
+            let body: Vec<u8> = r.get(3);
             debug!("buffering id: {:?}", id);
             self.buf.push_back(Entry {
                 version: id,
+                key: key,
                 data: body,
             })
         }
@@ -326,7 +332,8 @@ impl Consumer {
                         seq: r.get(2),
                     },
                 )
-            }).collect())
+            })
+            .collect())
     }
     pub fn clear_offset(&mut self) -> Result<()> {
         let conn = try!(self.pool.get());

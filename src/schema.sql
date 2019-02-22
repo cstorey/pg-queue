@@ -36,3 +36,16 @@ DO $$
         END IF;
     END
 $$;
+
+DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT true FROM pg_attribute
+            WHERE attrelid = 'logs'::regclass
+            AND attname = 'key'
+            AND NOT attisdropped
+        ) THEN
+            ALTER TABLE logs ADD COLUMN key BYTEA NOT NULL DEFAULT bytea 'default';
+        END IF;
+    END
+$$;
