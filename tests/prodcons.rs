@@ -1,6 +1,7 @@
 extern crate pg_queue;
 #[macro_use]
 extern crate log;
+extern crate chrono;
 extern crate env_logger;
 extern crate postgres;
 extern crate r2d2;
@@ -599,5 +600,35 @@ fn can_produce_consume_with_wait() {
             .map(|e| String::from_utf8_lossy(&e.data).to_string())
             .expect("join"),
         "42".to_string()
+    );
+}
+
+#[test]
+fn can_read_timestamp() {
+    env_logger::init().unwrap_or(());
+    let start = chrono::Utc::now();
+
+    let pool = pool("can_read_timestamp");
+    let mut prod = pg_queue::Producer::new(pool.clone()).expect("producer");
+    let mut cons = pg_queue::Consumer::new(pool.clone(), "default").expect("consumer");
+
+    let v = prod.produce(b"foo", b"42").expect("produce");
+
+    cons.wait_until_visible(v, time::Duration::from_secs(1))
+        .expect("wait for version");
+    let it = cons
+        .poll()
+        .expect("poll no error")
+        .expect("has some record");
+
+    let error = chrono::Duration::minutes(1);
+    let lower = start - error;
+    let upper = start + error;
+    assert!(
+        it.written_at >= lower && it.written_at < upper,
+        "Entry.written_at:{} is start time:{} ± {}",
+        it.written_at,
+        start,
+        error
     );
 }

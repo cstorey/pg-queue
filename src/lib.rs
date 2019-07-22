@@ -2,11 +2,13 @@
 extern crate log;
 #[macro_use]
 extern crate failure;
+extern crate chrono;
 extern crate fallible_iterator;
 extern crate postgres;
 extern crate r2d2;
 extern crate r2d2_postgres;
 
+use chrono::{DateTime, Utc};
 use failure::Error;
 use fallible_iterator::FallibleIterator;
 use r2d2::Pool;
@@ -20,7 +22,7 @@ static INSERT_ROW_SQL: &'static str =
     "INSERT INTO logs (key, body) values($1, $2) RETURNING tx_id, id";
 static SEND_NOTIFY_SQL: &'static str = "SELECT pg_notify('logs', $1 :: text)";
 static FETCH_NEXT_ROW: &'static str = "\
-    SELECT tx_id, id, key, body
+    SELECT tx_id, id, key, body, written_at
     FROM logs
     WHERE (tx_id, id) > ($1, $2)
     AND tx_id < txid_snapshot_xmin(txid_current_snapshot())
@@ -57,6 +59,7 @@ pub struct Version {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Entry {
     pub version: Version,
+    pub written_at: DateTime<Utc>,
     pub key: Vec<u8>,
     pub data: Vec<u8>,
 }
@@ -205,17 +208,19 @@ impl Consumer {
         ]));
         debug!("next rows:{:?}", rows.len());
         for r in rows.iter() {
-            let id = Version {
+            let version = Version {
                 tx_id: r.get(0),
                 seq: r.get(1),
             };
             let key: Vec<u8> = r.get(2);
-            let body: Vec<u8> = r.get(3);
-            debug!("buffering id: {:?}", id);
+            let data: Vec<u8> = r.get(3);
+            let written_at = r.get(4);
+            debug!("buffering id: {:?}", version);
             self.buf.push_back(Entry {
-                version: id,
-                key: key,
-                data: body,
+                version,
+                written_at,
+                key,
+                data,
             })
         }
         t.commit()?;
