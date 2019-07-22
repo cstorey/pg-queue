@@ -205,18 +205,14 @@ impl Consumer {
         ]));
         debug!("next rows:{:?}", rows.len());
         for r in rows.iter() {
-            let id = Version {
+            let version = Version {
                 tx_id: r.get(0),
                 seq: r.get(1),
             };
             let key: Vec<u8> = r.get(2);
-            let body: Vec<u8> = r.get(3);
-            debug!("buffering id: {:?}", id);
-            self.buf.push_back(Entry {
-                version: id,
-                key: key,
-                data: body,
-            })
+            let data: Vec<u8> = r.get(3);
+            debug!("buffering id: {:?}", version);
+            self.buf.push_back(Entry { version, key, data })
         }
         t.commit()?;
 
