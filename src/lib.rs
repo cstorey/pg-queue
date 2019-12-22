@@ -65,7 +65,7 @@ pub struct Entry {
 }
 
 pub fn setup<C: postgres::GenericConnection>(conn: &C) -> Result<()> {
-    try!(conn.batch_execute(CREATE_TABLE_SQL));
+    conn.batch_execute(CREATE_TABLE_SQL)?;
     Ok(())
 }
 
@@ -82,7 +82,7 @@ pub struct Batch<'a> {
 
 impl Producer {
     pub fn new(pool: Pool<PostgresConnectionManager>) -> Result<Self> {
-        let conn = try!(pool.get());
+        let conn = pool.get()?;
         Ok(Producer { conn: conn })
     }
 
@@ -94,7 +94,7 @@ impl Producer {
     }
 
     pub fn batch(&mut self) -> Result<Batch> {
-        let t = try!(self.conn.transaction());
+        let t = self.conn.transaction()?;
         Ok(Batch {
             conn: &self.conn,
             transaction: t,
@@ -105,7 +105,7 @@ impl Producer {
 
 impl<'a> Batch<'a> {
     pub fn produce(&mut self, key: &[u8], body: &[u8]) -> Result<Version> {
-        let rows = try!(self.transaction.query(INSERT_ROW_SQL, &[&key, &body]));
+        let rows = self.transaction.query(INSERT_ROW_SQL, &[&key, &body])?;
         let id = rows
             .iter()
             .map(|r| Version {
@@ -127,7 +127,7 @@ impl<'a> Batch<'a> {
             conn,
             last_version,
         } = self;
-        try!(transaction.commit());
+        transaction.commit()?;
         debug!("Committed");
         // It looks like postgres will:
         // * Take a database scoped exclusive lock when appending notifications to the queue on commit
@@ -137,7 +137,7 @@ impl<'a> Batch<'a> {
         if let Some(id) = last_version {
             // We never actually parse the version, it's just a nice to have.
             let vers = format!("{}", id.seq);
-            try!(conn.query(SEND_NOTIFY_SQL, &[&vers]));
+            conn.query(SEND_NOTIFY_SQL, &[&vers])?;
             debug!("Sent notify for id: {:?}", id);
         }
         Ok(())
@@ -146,7 +146,7 @@ impl<'a> Batch<'a> {
     pub fn rollback(self) -> Result<()> {
         let Batch { transaction, .. } = self;
         transaction.set_rollback();
-        try!(transaction.finish());
+        transaction.finish()?;
         debug!("Rolled back");
         Ok(())
     }
@@ -162,10 +162,10 @@ pub struct Consumer {
 
 impl Consumer {
     pub fn new(pool: Pool<PostgresConnectionManager>, name: &str) -> Result<Self> {
-        let conn = try!(pool.get());
-        let t = try!(conn.transaction());
-        let stmt = try!(t.prepare_cached(FETCH_CONSUMER_POSITION));
-        let rows = try!(stmt.query(&[&name]));
+        let conn = pool.get()?;
+        let t = conn.transaction()?;
+        let stmt = t.prepare_cached(FETCH_CONSUMER_POSITION)?;
+        let rows = stmt.query(&[&name])?;
         debug!("next rows:{:?}", rows.len());
         let position = rows
             .iter()
@@ -188,7 +188,7 @@ impl Consumer {
     }
 
     pub fn poll(&mut self) -> Result<Option<Entry>> {
-        let conn = try!(self.pool.get());
+        let conn = self.pool.get()?;
         self.poll_item(&conn)
     }
 
@@ -199,13 +199,13 @@ impl Consumer {
             return Ok(Some(entry));
         }
 
-        let t = try!(conn.transaction());
-        let next_row = try!(t.prepare_cached(FETCH_NEXT_ROW));
-        let rows = try!(next_row.query(&[
+        let t = conn.transaction()?;
+        let next_row = t.prepare_cached(FETCH_NEXT_ROW)?;
+        let rows = next_row.query(&[
             &self.last_seen_offset.tx_id,
             &self.last_seen_offset.seq,
-            &LIMIT_BUFFER
-        ]));
+            &LIMIT_BUFFER,
+        ])?;
         debug!("next rows:{:?}", rows.len());
         for r in rows.iter() {
             let version = Version {
@@ -236,15 +236,15 @@ impl Consumer {
     }
 
     pub fn wait_next(&mut self) -> Result<Entry> {
-        let conn = try!(self.pool.get());
-        let listen = try!(conn.prepare_cached(LISTEN));
-        try!(listen.execute(&[]));
+        let conn = self.pool.get()?;
+        let listen = conn.prepare_cached(LISTEN)?;
+        listen.execute(&[])?;
         loop {
             let notifications = conn.notifications();
             while let Some(n) = notifications.iter().next()? {
                 debug!("Saw previous notification: {:?}", n);
             }
-            if let Some(entry) = try!(self.poll_item(&conn)) {
+            if let Some(entry) = self.poll_item(&conn)? {
                 return Ok(entry);
             }
             debug!("Awaiting notifications");
@@ -300,11 +300,11 @@ impl Consumer {
     }
 
     pub fn commit_upto(&self, entry: &Entry) -> Result<()> {
-        let conn = try!(self.pool.get());
-        let t = try!(conn.transaction());
-        let upsert = try!(t.prepare_cached(UPSERT_CONSUMER_OFFSET));
-        try!(upsert.execute(&[&self.name, &entry.version.tx_id, &entry.version.seq]));
-        try!(t.commit());
+        let conn = self.pool.get()?;
+        let t = conn.transaction()?;
+        let upsert = t.prepare_cached(UPSERT_CONSUMER_OFFSET)?;
+        upsert.execute(&[&self.name, &entry.version.tx_id, &entry.version.seq])?;
+        t.commit()?;
         trace!(
             "Persisted position for consumer {:?}: {:?}",
             self.name,
@@ -314,18 +314,18 @@ impl Consumer {
     }
 
     pub fn discard_upto(&self, limit: Version) -> Result<()> {
-        let conn = try!(self.pool.get());
-        let t = try!(conn.transaction());
-        let discard = try!(t.prepare_cached(DISCARD_ENTRIES));
-        try!(discard.execute(&[&limit.tx_id, &limit.seq]));
-        try!(t.commit());
+        let conn = self.pool.get()?;
+        let t = conn.transaction()?;
+        let discard = t.prepare_cached(DISCARD_ENTRIES)?;
+        discard.execute(&[&limit.tx_id, &limit.seq])?;
+        t.commit()?;
         Ok(())
     }
     pub fn consumers(&self) -> Result<BTreeMap<String, Version>> {
-        let conn = try!(self.pool.get());
-        let t = try!(conn.transaction());
-        let list = try!(t.prepare_cached(LIST_CONSUMERS));
-        let rows = try!(list.query(&[]));
+        let conn = self.pool.get()?;
+        let t = conn.transaction()?;
+        let list = t.prepare_cached(LIST_CONSUMERS)?;
+        let rows = list.query(&[])?;
 
         Ok(rows
             .iter()
@@ -341,12 +341,12 @@ impl Consumer {
             .collect())
     }
     pub fn clear_offset(&mut self) -> Result<()> {
-        let conn = try!(self.pool.get());
-        let t = try!(conn.transaction());
-        let discard = try!(t.prepare_cached(DISCARD_CONSUMER));
+        let conn = self.pool.get()?;
+        let t = conn.transaction()?;
+        let discard = t.prepare_cached(DISCARD_CONSUMER)?;
 
-        try!(discard.execute(&[&self.name]));
-        try!(t.commit());
+        discard.execute(&[&self.name])?;
+        t.commit()?;
         Ok(())
     }
 }
