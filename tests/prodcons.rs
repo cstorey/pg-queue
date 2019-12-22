@@ -1,11 +1,10 @@
-extern crate pg_queue;
+use pg_queue;
 #[macro_use]
 extern crate log;
-extern crate chrono;
-extern crate env_logger;
-extern crate postgres;
-extern crate r2d2;
-extern crate r2d2_postgres;
+use chrono;
+use env_logger;
+use postgres;
+use r2d2;
 
 use r2d2::Pool;
 use r2d2_postgres::{PostgresConnectionManager, TlsMode};
@@ -22,25 +21,20 @@ struct UseTempSchema(String);
 impl r2d2::CustomizeConnection<postgres::Connection, postgres::Error> for UseTempSchema {
     fn on_acquire(&self, conn: &mut postgres::Connection) -> Result<(), postgres::Error> {
         loop {
-            let t = try!(conn.transaction().map_err(|e| e));
+            let t = conn.transaction()?;
             let nschemas: i64 = {
-                let rows = try!(t
-                    .query(
-                        "SELECT count(*) from pg_catalog.pg_namespace n where n.nspname = $1",
-                        &[&self.0]
-                    )
-                    .map_err(|e| e));
+                let rows = t.query(
+                    "SELECT count(*) from pg_catalog.pg_namespace n where n.nspname = $1",
+                    &[&self.0],
+                )?;
                 let row = rows.get(0);
                 row.get(0)
             };
             debug!("Number of {} schemas:{}", self.0, nschemas);
             if nschemas == 0 {
-                match t
-                    .execute(&format!("CREATE SCHEMA \"{}\"", self.0), &[])
-                    .map_err(|e| e)
-                {
+                match t.execute(&format!("CREATE SCHEMA \"{}\"", self.0), &[]) {
                     Ok(_) => {
-                        try!(t.commit().map_err(|e| e));
+                        t.commit()?;
                         break;
                     }
                     Err(e) => warn!("Error creating schema:{:?}: {:?}", self.0, e),
@@ -49,9 +43,7 @@ impl r2d2::CustomizeConnection<postgres::Connection, postgres::Error> for UseTem
                 break;
             }
         }
-        try!(conn
-            .execute(&format!("SET search_path TO \"{}\"", self.0), &[])
-            .map_err(|e| e));
+        conn.execute(&format!("SET search_path TO \"{}\"", self.0), &[])?;
         Ok(())
     }
 }
