@@ -1,11 +1,10 @@
-extern crate pg_queue;
+use pg_queue;
 #[macro_use]
 extern crate log;
-extern crate chrono;
-extern crate env_logger;
-extern crate postgres;
-extern crate r2d2;
-extern crate r2d2_postgres;
+use chrono;
+use env_logger;
+use postgres;
+use r2d2;
 
 use r2d2::Pool;
 use r2d2_postgres::{PostgresConnectionManager, TlsMode};

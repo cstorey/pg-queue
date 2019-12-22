@@ -2,11 +2,9 @@
 extern crate log;
 #[macro_use]
 extern crate failure;
-extern crate chrono;
-extern crate fallible_iterator;
-extern crate postgres;
-extern crate r2d2;
-extern crate r2d2_postgres;
+
+use postgres;
+use r2d2;
 
 use chrono::{DateTime, Utc};
 use failure::Error;
@@ -93,7 +91,7 @@ impl Producer {
         Ok(version)
     }
 
-    pub fn batch(&mut self) -> Result<Batch> {
+    pub fn batch(&mut self) -> Result<Batch<'_>> {
         let t = self.conn.transaction()?;
         Ok(Batch {
             conn: &self.conn,
