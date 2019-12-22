@@ -3,6 +3,7 @@ authors = ["Ceri Storey <cez@necrofish.org.uk>"]
 license = "MIT"
 name = "pg-queue"
 version = "0.1.0"
+edition = "2018"
 
 [dependencies]
 failure = "0.1.3"
