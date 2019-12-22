@@ -1,18 +1,16 @@
 #[macro_use]
 extern crate log;
-#[macro_use]
-extern crate failure;
 
 use postgres;
 use r2d2;
 
 use chrono::{DateTime, Utc};
-use failure::Error;
 use fallible_iterator::FallibleIterator;
 use r2d2::Pool;
 use r2d2_postgres::PostgresConnectionManager;
 use std::collections::{BTreeMap, VecDeque};
 use std::time;
+use thiserror::Error;
 
 const LIMIT_BUFFER: i64 = 1024;
 
@@ -47,7 +45,6 @@ static CREATE_TABLE_SQL: &'static str = include_str!("schema.sql");
 
 static LISTEN: &'static str = "LISTEN logs";
 
-type Result<T> = ::std::result::Result<T, Error>;
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Version {
     pub tx_id: i64,
@@ -60,6 +57,22 @@ pub struct Entry {
     pub written_at: DateTime<Utc>,
     pub key: Vec<u8>,
     pub data: Vec<u8>,
+}
+
+type Result<T> = ::std::result::Result<T, Error>;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("Connection pool")]
+    Pool(#[from] r2d2::Error),
+    #[error("Postgres")]
+    Postgres(#[from] postgres::Error),
+    #[error("insert returned no rows?")]
+    NoRowsFromInsert,
+    #[error("txn version comparison returned no rows?")]
+    NoRowsFromVisibilityCheck,
+    #[error("Item was not visible before deadline: {0:?}")]
+    VisibilityTimeout(Version),
 }
 
 pub fn setup<C: postgres::GenericConnection>(conn: &C) -> Result<()> {
@@ -111,7 +124,7 @@ impl<'a> Batch<'a> {
                 seq: r.get::<_, i64>(1),
             })
             .next()
-            .ok_or_else(|| failure::err_msg("insert returned no rows?"))?;
+            .ok_or_else(|| Error::NoRowsFromInsert)?;
 
         debug!("id: {:?}", id);
         self.last_version = Some(id);
@@ -264,7 +277,7 @@ impl Consumer {
                 .into_iter()
                 .next()
                 .map(|r| (r.get::<_, bool>(0), r.get::<_, i64>(1), r.get::<_, i64>(2)))
-                .ok_or_else(|| failure::err_msg("txn version comparison returned no rows?"))?;
+                .ok_or_else(|| Error::NoRowsFromVisibilityCheck)?;
             trace!(
                 "Visibility check: is_visible:{:?}; xmin:{:?}; current: {:?}",
                 is_visible,
@@ -279,7 +292,7 @@ impl Consumer {
             }
 
             if now > deadline {
-                bail!("Item was not visible before deadline: {:?}", version);
+                return Err(Error::VisibilityTimeout(version));
             }
 
             let remaining = deadline - now;
