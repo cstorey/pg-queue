@@ -70,7 +70,7 @@ fn pool(schema: &str) -> Pool<PostgresConnectionManager> {
 
 #[test]
 fn can_produce_none() {
-    env_logger::init().unwrap_or(());
+    env_logger::try_init().unwrap_or(());
     let pool = pool("can_produce_none");
     let mut cons = pg_queue::Consumer::new(pool.clone(), "default").expect("consumer");
     assert_eq!(cons.poll().expect("poll").map(|e| e.data), None)
@@ -78,7 +78,7 @@ fn can_produce_none() {
 
 #[test]
 fn can_produce_one() {
-    env_logger::init().unwrap_or(());
+    env_logger::try_init().unwrap_or(());
     let pool = pool("can_produce_one");
     let mut prod = pg_queue::Producer::new(pool.clone()).expect("producer");
     let mut cons = pg_queue::Consumer::new(pool.clone(), "default").expect("consumer");
@@ -99,7 +99,7 @@ fn can_produce_one() {
 
 #[test]
 fn can_produce_several() {
-    env_logger::init().unwrap_or(());
+    env_logger::try_init().unwrap_or(());
     let pool = pool("can_produce_several");
     let mut prod = pg_queue::Producer::new(pool.clone()).expect("producer");
     let mut cons = pg_queue::Consumer::new(pool.clone(), "default").expect("consumer");
@@ -126,7 +126,7 @@ fn can_produce_several() {
 
 #[test]
 fn can_produce_ordered() {
-    env_logger::init().unwrap_or(());
+    env_logger::try_init().unwrap_or(());
     let pool = pool("can_produce_ordered");
     let mut prod = pg_queue::Producer::new(pool.clone()).expect("producer");
     let v0 = prod.produce(b"a", b"0").expect("produce");
@@ -139,7 +139,7 @@ fn can_produce_ordered() {
 
 #[test]
 fn can_produce_in_batches() {
-    env_logger::init().unwrap_or(());
+    env_logger::try_init().unwrap_or(());
     let pool = pool("can_produce_in_batches");
     let mut prod = pg_queue::Producer::new(pool.clone()).expect("producer");
     let mut cons = pg_queue::Consumer::new(pool.clone(), "default").expect("consumer");
@@ -171,7 +171,7 @@ fn can_produce_in_batches() {
 
 #[test]
 fn can_rollback_batches() {
-    env_logger::init().unwrap_or(());
+    env_logger::try_init().unwrap_or(());
     let pool = pool("can_rollback_batches");
     let mut prod = pg_queue::Producer::new(pool.clone()).expect("producer");
     let mut cons = pg_queue::Consumer::new(pool.clone(), "default").expect("consumer");
@@ -191,7 +191,7 @@ fn can_rollback_batches() {
 
 #[test]
 fn can_produce_incrementally() {
-    env_logger::init().unwrap_or(());
+    env_logger::try_init().unwrap_or(());
     let pool = pool("can_produce_incrementally");
     pg_queue::Producer::new(pool.clone())
         .expect("producer")
@@ -220,7 +220,7 @@ fn can_produce_incrementally() {
 
 #[test]
 fn can_consume_incrementally() {
-    env_logger::init().unwrap_or(());
+    env_logger::try_init().unwrap_or(());
     let pool = pool("can_consume_incrementally");
     let mut prod = pg_queue::Producer::new(pool.clone()).expect("producer");
     prod.produce(b"key", b"0").expect("produce");
@@ -249,7 +249,7 @@ fn can_consume_incrementally() {
 
 #[test]
 fn can_restart_consume_at_commit_point() {
-    env_logger::init().unwrap_or(());
+    env_logger::try_init().unwrap_or(());
     let pool = pool("can_restart_consume_at_commit_point");
     let mut prod = pg_queue::Producer::new(pool.clone()).expect("producer");
     prod.produce(b"key", b"0").expect("produce");
@@ -279,7 +279,7 @@ fn can_restart_consume_at_commit_point() {
 
 #[test]
 fn can_progress_without_commit() {
-    env_logger::init().unwrap_or(());
+    env_logger::try_init().unwrap_or(());
     let pool = pool("can_progress_without_commit");
     let mut prod = pg_queue::Producer::new(pool.clone()).expect("producer");
     prod.produce(b"key", b"0").expect("produce");
@@ -299,7 +299,7 @@ fn can_progress_without_commit() {
 
 #[test]
 fn can_consume_multiply() {
-    env_logger::init().unwrap_or(());
+    env_logger::try_init().unwrap_or(());
     let pool = pool("can_consume_multiply");
     let mut prod = pg_queue::Producer::new(pool.clone()).expect("producer");
     prod.produce(b"key", b"0").expect("produce");
@@ -338,7 +338,7 @@ fn can_consume_multiply() {
 #[test]
 // #[ignore]
 fn producing_concurrently_should_never_leave_holes() {
-    env_logger::init().unwrap_or(());
+    env_logger::try_init().unwrap_or(());
 
     let pool = pool("producing_concurrently_should_never_leave_holes");
     let mut prod1 = pg_queue::Producer::new(pool.clone()).expect("producer");
@@ -392,7 +392,7 @@ fn producing_concurrently_should_never_leave_holes() {
 
 #[test]
 fn can_list_zero_consumer_offsets() {
-    env_logger::init().unwrap_or(());
+    env_logger::try_init().unwrap_or(());
     let pool = pool("can_list_zero_consumer_offsets");
     let mut prod = pg_queue::Producer::new(pool.clone()).expect("producer");
     prod.produce(b"key", b"0").expect("produce");
@@ -404,7 +404,7 @@ fn can_list_zero_consumer_offsets() {
 
 #[test]
 fn can_list_consumer_offset() {
-    env_logger::init().unwrap_or(());
+    env_logger::try_init().unwrap_or(());
     let pool = pool("can_list_consumer_offset");
     let mut prod = pg_queue::Producer::new(pool.clone()).expect("producer");
     prod.produce(b"key", b"0").expect("produce");
@@ -427,7 +427,7 @@ fn can_list_consumer_offset() {
 
 #[test]
 fn can_list_consumer_offsets() {
-    env_logger::init().unwrap_or(());
+    env_logger::try_init().unwrap_or(());
     let pool = pool("can_list_consumer_offsets");
     let mut prod = pg_queue::Producer::new(pool.clone()).expect("producer");
     prod.produce(b"key", b"0").expect("produce");
@@ -461,7 +461,7 @@ fn can_list_consumer_offsets() {
 
 #[test]
 fn can_discard_entries() {
-    env_logger::init().unwrap_or(());
+    env_logger::try_init().unwrap_or(());
     let pool = pool("can_discard_entries");
     let mut prod = pg_queue::Producer::new(pool.clone()).expect("producer");
     prod.produce(b"key", b"0").expect("produce");
@@ -490,7 +490,7 @@ fn can_discard_entries() {
 
 #[test]
 fn can_discard_on_empty() {
-    env_logger::init().unwrap_or(());
+    env_logger::try_init().unwrap_or(());
     let pool = pool("can_discard_on_empty");
     {
         let cons = pg_queue::Consumer::new(pool.clone(), "cleaner").expect("consumer");
@@ -501,7 +501,7 @@ fn can_discard_on_empty() {
 
 #[test]
 fn can_discard_after_written() {
-    env_logger::init().unwrap_or(());
+    env_logger::try_init().unwrap_or(());
     let pool = pool("can_discard_after_written");
     let mut prod = pg_queue::Producer::new(pool.clone()).expect("producer");
     let v = prod.produce(b"key", b"0").expect("produce");
@@ -517,7 +517,7 @@ fn can_discard_after_written() {
 
 #[test]
 fn can_remove_consumer_offset() {
-    env_logger::init().unwrap_or(());
+    env_logger::try_init().unwrap_or(());
     let pool = pool("can_remove_consumer_offset");
     let mut prod = pg_queue::Producer::new(pool.clone()).expect("producer");
     prod.produce(b"key", b"0").expect("produce");
@@ -545,7 +545,7 @@ fn can_remove_consumer_offset() {
 
 #[test]
 fn removing_non_consumer_is_noop() {
-    env_logger::init().unwrap_or(());
+    env_logger::try_init().unwrap_or(());
     let pool = pool("removing_non_consumer_is_noop");
     let mut prod = pg_queue::Producer::new(pool.clone()).expect("producer");
     prod.produce(b"key", b"0").expect("produce");
@@ -572,7 +572,7 @@ fn removing_non_consumer_is_noop() {
 
 #[test]
 fn can_produce_consume_with_wait() {
-    env_logger::init().unwrap_or(());
+    env_logger::try_init().unwrap_or(());
     let pool = pool("can_produce_consume_with_wait");
     let mut prod = pg_queue::Producer::new(pool.clone()).expect("producer");
     let mut cons = pg_queue::Consumer::new(pool.clone(), "default").expect("consumer");
@@ -597,7 +597,7 @@ fn can_produce_consume_with_wait() {
 
 #[test]
 fn can_read_timestamp() {
-    env_logger::init().unwrap_or(());
+    env_logger::try_init().unwrap_or(());
     let start = chrono::Utc::now();
 
     let pool = pool("can_read_timestamp");
