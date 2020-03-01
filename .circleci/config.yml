@@ -1,13 +1,56 @@
-# Use the latest 2.1 version of CircleCI pipeline process engine. See: https://circleci.com/docs/2.0/configuration-reference
-version: 2.1
-# Use a package of configuration called an orb.
-orbs:
-  # Declare a dependency on the welcome-orb
-  welcome: circleci/welcome-orb@0.4.1
-# Orchestrate or schedule a set of jobs
-workflows:
-  # Name the workflow "welcome"
-  welcome:
-    # Run the welcome/run job in its own container
-    jobs:
-      - welcome/run
+# Borrowed from https://github.com/sfackler/rust-postgres/blob/04bd98e7edb238511661b311c725a176012bca6a/.circleci/config.yml
+# Used under MIT license.
+
+version: 2
+jobs:
+  build:
+    docker:
+    - environment:
+        POSTGRES_URL: postgres://circleci@localhost:5432/circleci-pg-queue
+        RUSTFLAGS: -D warnings
+      image: circleci/rust:1-browsers
+    - environment:
+        POSTGRES_DB: circleci-pg-queue
+        POSTGRES_USER: circleci
+      image: postgres:11.2-alpine
+    steps:
+    - checkout
+    - run: |
+          upstream=${CIRCLE_REPOSITORY_URL:-$(git remote  get-url origin)}
+          git config --global user.email "circleci@invalid.example"
+          git config --global user.name "CircleCI build for ${upstream}"
+          git merge --no-edit --no-ff origin/master
+    - restore_cache:
+        name: "Restore registry index"
+        key: registry
+    - run: cargo generate-lockfile
+    - save_cache:
+        name: "Save registry index"
+        key: registry-{{ .BuildNum }}
+        paths:
+        - /usr/local/cargo/registry/index
+    - run: rustc --version | tee ~/rust-version
+    - restore_cache:
+        name: "Restore registry cache"
+        keys:
+        - registry-cache-{{ checksum "Cargo.lock" }}
+    - restore_cache:
+        name: "Restore target"
+        keys:
+        - target-{{ checksum "~/rust-version" }}-{{ checksum "Cargo.lock" }}
+    - run: cargo clean -p pg-queue
+    - run: cargo build --all --tests --locked
+    - save_cache:
+        name: "Save registry cache"
+        key: registry-cache-{{ checksum "Cargo.lock" }}-{{ .BuildNum }}
+        paths:
+        - /usr/local/cargo/registry/cache
+    - save_cache:
+        name: "Save target"
+        key: target-{{ checksum "~/rust-version" }}-{{ checksum "Cargo.lock" }}
+        paths:
+        - target
+    - run:
+        name: Waiting for Postgres to be ready
+        command: ./bin/await-postgres
+    - run: env RUST_BACKTRACE=1 cargo test --locked
