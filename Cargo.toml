@@ -6,7 +6,7 @@ version = "0.1.0"
 edition = "2018"
 
 [dependencies]
-fallible-iterator = "0.1.5"
+fallible-iterator = "0.2.0"
 flate2 = "0.2.14"
 log = "0.4.8"
 postgres = { version = "0.15.2", features=["with-chrono"] }
