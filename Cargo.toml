@@ -9,13 +9,17 @@ edition = "2018"
 fallible-iterator = "0.1.5"
 flate2 = "0.2.14"
 log = "0.4.8"
-postgres = { version = "0.15.2", features=["with-chrono"] }
-r2d2 = "0.8.3"
-r2d2_postgres = "0.14.0"
+tokio-postgres = { version = "0.5.2" }
 time = "0.1"
 url = "2.1.1"
 chrono = "0.4.7"
 thiserror = "1.0.9"
+tokio = {version="0.2.11", features=["sync"]}
+postgres-types = { version="0.1.0", features=["with-chrono-0_4"]}
+futures = "0.3.4"
+futures-util = "0.3.4"
 
 [dev-dependencies]
 env_logger = "0.7.1"
+tokio = {version="0.2.11", features=["macros", "rt-core", "dns"]}
+anyhow = "1.0.26"
