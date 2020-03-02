@@ -10,7 +10,6 @@ fallible-iterator = "0.1.5"
 flate2 = "0.2.14"
 log = "0.4.8"
 tokio-postgres = { version = "0.5.2" }
-time = "0.1"
 url = "2.1.1"
 chrono = "0.4.7"
 thiserror = "1.0.9"
