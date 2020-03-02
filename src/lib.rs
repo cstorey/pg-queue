@@ -74,6 +74,8 @@ pub enum Error {
     NoRowsFromVisibilityCheck,
     #[error("Item was not visible before deadline: {0:?}")]
     VisibilityTimeout(Version),
+    #[error("Connection exited unexpectedly")]
+    ConnectionExited,
 }
 
 pub async fn setup(conn: &Client) -> Result<()> {
@@ -186,7 +188,10 @@ impl Consumer {
         };
 
         let rows = tokio::select! {
-            res = (&mut conn) => {unimplemented!("Error here? {:?}", res)},
+            res = (&mut conn) => {
+                let () = res?;
+                return Err(Error::ConnectionExited.into());
+            },
             rows = rows_f => { rows? },
         };
         debug!("next rows:{:?}", rows.len());
