@@ -11,6 +11,7 @@ use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     sync::Notify,
+    time::{delay_for, Duration},
 };
 use tokio_postgres::{self, AsyncMessage, Client, Connection};
 
@@ -339,7 +340,7 @@ impl Consumer {
             }
 
             let remaining = deadline - now;
-            let backoff = time::Duration::from_millis((2u64).pow(backoff));
+            let backoff = Duration::from_millis((2u64).pow(backoff));
             let sleep = std::cmp::min(remaining, backoff);
             trace!(
                 "remaining: {:?}; backoff: {:?}; Pause for: {:?}",
@@ -347,7 +348,7 @@ impl Consumer {
                 sleep,
                 sleep
             );
-            std::thread::sleep(sleep);
+            delay_for(sleep).await;
         }
 
         Ok(())
