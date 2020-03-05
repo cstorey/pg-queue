@@ -1,16 +1,19 @@
+use std::{fmt, sync::Arc};
+
 #[macro_use]
 extern crate log;
 
-use postgres;
-use r2d2;
-
 use chrono::{DateTime, Utc};
-use fallible_iterator::FallibleIterator;
-use r2d2::Pool;
-use r2d2_postgres::PostgresConnectionManager;
+use futures_util::stream::StreamExt;
 use std::collections::{BTreeMap, VecDeque};
 use std::time;
 use thiserror::Error;
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    sync::Notify,
+    time::{delay_for, Duration},
+};
+use tokio_postgres::{self, AsyncMessage, Client, Connection};
 
 const LIMIT_BUFFER: i64 = 1024;
 
@@ -63,60 +66,51 @@ type Result<T> = ::std::result::Result<T, Error>;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Connection pool")]
-    Pool(#[from] r2d2::Error),
     #[error("Postgres")]
-    Postgres(#[from] postgres::Error),
+    Postgres(#[from] tokio_postgres::Error),
     #[error("insert returned no rows?")]
     NoRowsFromInsert,
     #[error("txn version comparison returned no rows?")]
     NoRowsFromVisibilityCheck,
     #[error("Item was not visible before deadline: {0:?}")]
     VisibilityTimeout(Version),
+    #[error("Connection exited unexpectedly")]
+    ConnectionExited,
 }
 
-pub fn setup<C: postgres::GenericConnection>(conn: &C) -> Result<()> {
-    conn.batch_execute(CREATE_TABLE_SQL)?;
+pub async fn setup(conn: &Client) -> Result<()> {
+    debug!("Running setup SQL");
+    conn.batch_execute(CREATE_TABLE_SQL).await?;
+    debug!("Ran setup SQL ok");
     Ok(())
 }
 
-#[derive(Debug)]
-pub struct Producer {
-    conn: r2d2::PooledConnection<PostgresConnectionManager>,
-}
-
 pub struct Batch<'a> {
-    transaction: postgres::transaction::Transaction<'a>,
-    conn: &'a postgres::Connection,
+    transaction: tokio_postgres::Transaction<'a>,
     last_version: Option<Version>,
 }
 
-impl Producer {
-    pub fn new(pool: Pool<PostgresConnectionManager>) -> Result<Self> {
-        let conn = pool.get()?;
-        Ok(Producer { conn: conn })
-    }
+pub async fn produce(client: &mut Client, key: &[u8], body: &[u8]) -> Result<Version> {
+    let mut batch = batch(client).await?;
+    let version = batch.produce(key, body).await?;
+    batch.commit().await?;
+    Ok(version)
+}
 
-    pub fn produce(&mut self, key: &[u8], body: &[u8]) -> Result<Version> {
-        let mut batch = self.batch()?;
-        let version = batch.produce(key, body)?;
-        batch.commit()?;
-        Ok(version)
-    }
-
-    pub fn batch(&mut self) -> Result<Batch<'_>> {
-        let t = self.conn.transaction()?;
-        Ok(Batch {
-            conn: &self.conn,
-            transaction: t,
-            last_version: None,
-        })
-    }
+pub async fn batch(client: &mut Client) -> Result<Batch<'_>> {
+    let t = client.transaction().await?;
+    Ok(Batch {
+        transaction: t,
+        last_version: None,
+    })
 }
 
 impl<'a> Batch<'a> {
-    pub fn produce(&mut self, key: &[u8], body: &[u8]) -> Result<Version> {
-        let rows = self.transaction.query(INSERT_ROW_SQL, &[&key, &body])?;
+    pub async fn produce(&mut self, key: &[u8], body: &[u8]) -> Result<Version> {
+        let rows = self
+            .transaction
+            .query(INSERT_ROW_SQL, &[&key, &body])
+            .await?;
         let id = rows
             .iter()
             .map(|r| Version {
@@ -132,51 +126,74 @@ impl<'a> Batch<'a> {
         Ok(id)
     }
 
-    pub fn commit(self) -> Result<()> {
-        let Batch {
-            transaction,
-            conn,
-            last_version,
-        } = self;
-        transaction.commit()?;
-        debug!("Committed");
-        // It looks like postgres will:
+    pub async fn commit(self) -> Result<()> {
+        // It looks like postgres 9x will:
         // * Take a database scoped exclusive lock when appending notifications to the queue on commit
         // * Continue holding that lock until the transaction overall commits.
         // This means that WAL flushes get serialized, we can't take advantage of group commit,
         // and write throughput tanks.
+        // However, because it's _really_ awkward_ to get a reference to both
+        // a client and it's transaction, we do this inside the transaction
+        // and hope for the best.
+        let Batch {
+            transaction,
+            last_version,
+        } = self;
         if let Some(id) = last_version {
             // We never actually parse the version, it's just a nice to have.
             let vers = format!("{}", id.seq);
-            conn.query(SEND_NOTIFY_SQL, &[&vers])?;
+            transaction.query(SEND_NOTIFY_SQL, &[&vers]).await?;
             debug!("Sent notify for id: {:?}", id);
         }
+        transaction.commit().await?;
+        debug!("Committed");
+
         Ok(())
     }
 
-    pub fn rollback(self) -> Result<()> {
+    pub async fn rollback(self) -> Result<()> {
         let Batch { transaction, .. } = self;
-        transaction.set_rollback();
-        transaction.finish()?;
+        transaction.rollback().await?;
         debug!("Rolled back");
         Ok(())
     }
 }
 
-#[derive(Debug)]
 pub struct Consumer {
-    pool: Pool<PostgresConnectionManager>,
+    client: Client,
     name: String,
     last_seen_offset: Version,
     buf: VecDeque<Entry>,
+    notify: Arc<Notify>,
 }
 
 impl Consumer {
-    pub fn new(pool: Pool<PostgresConnectionManager>, name: &str) -> Result<Self> {
-        let conn = pool.get()?;
-        let t = conn.transaction()?;
-        let stmt = t.prepare_cached(FETCH_CONSUMER_POSITION)?;
-        let rows = stmt.query(&[&name])?;
+    // We will also need to spawn a process that:
+    // a: spawns a connection into a process that will siphon messages into a queue
+
+    pub async fn new<
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+        T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    >(
+        mut conn: Connection<S, T>,
+        mut client: Client,
+        name: &str,
+    ) -> Result<Self> {
+        let rows_f = async {
+            let t = client.transaction().await?;
+            let stmt = t.prepare(FETCH_CONSUMER_POSITION).await?;
+            let rows = t.query(&stmt, &[&name]).await?;
+            t.commit().await?;
+            Ok::<_, tokio_postgres::Error>(rows)
+        };
+
+        let rows = tokio::select! {
+            res = (&mut conn) => {
+                let () = res?;
+                return Err(Error::ConnectionExited.into());
+            },
+            rows = rows_f => { rows? },
+        };
         debug!("next rows:{:?}", rows.len());
         let position = rows
             .iter()
@@ -189,34 +206,69 @@ impl Consumer {
                 tx_id: 0,
                 seq: -1i64,
             });
+
         trace!("Loaded position for consumer {:?}: {:?}", name, position);
-        Ok(Consumer {
-            pool: pool,
+
+        let notify = Arc::new(Notify::new());
+        tokio::spawn(Self::run_connection(conn, notify.clone()));
+
+        let consumer = Consumer {
+            client,
+            notify,
             name: name.to_string(),
             last_seen_offset: position,
             buf: VecDeque::new(),
-        })
+        };
+
+        Ok(consumer)
     }
 
-    pub fn poll(&mut self) -> Result<Option<Entry>> {
-        let conn = self.pool.get()?;
-        self.poll_item(&conn)
+    async fn run_connection<
+        S: AsyncRead + AsyncWrite + Unpin,
+        T: AsyncRead + AsyncWrite + Unpin,
+    >(
+        mut conn: Connection<S, T>,
+        notify: Arc<Notify>,
+    ) -> Result<()> {
+        debug!("Listening for notifies on connection");
+        let mut messages = futures::stream::poll_fn(|cx| conn.poll_message(cx));
+        while let Some(item) = messages.next().await.transpose()? {
+            match item {
+                AsyncMessage::Notice(err) => info!("Db notice: {}", err),
+                AsyncMessage::Notification(n) => {
+                    debug!("Received notification: {:?}", n);
+                    notify.notify();
+                }
+                _ => debug!("Other message received"),
+            }
+        }
+
+        Ok(())
     }
 
-    fn poll_item(&mut self, conn: &postgres::Connection) -> Result<Option<Entry>> {
+    pub async fn poll(&mut self) -> Result<Option<Entry>> {
+        self.poll_item().await
+    }
+
+    async fn poll_item(&mut self) -> Result<Option<Entry>> {
         if let Some(entry) = self.buf.pop_front() {
             trace!("returning (from buffer): {:?}", entry);
             self.last_seen_offset = entry.version;
             return Ok(Some(entry));
         }
 
-        let t = conn.transaction()?;
-        let next_row = t.prepare_cached(FETCH_NEXT_ROW)?;
-        let rows = next_row.query(&[
-            &self.last_seen_offset.tx_id,
-            &self.last_seen_offset.seq,
-            &LIMIT_BUFFER,
-        ])?;
+        let t = self.client.transaction().await?;
+        let next_row = t.prepare(FETCH_NEXT_ROW).await?;
+        let rows = t
+            .query(
+                &next_row,
+                &[
+                    &self.last_seen_offset.tx_id,
+                    &self.last_seen_offset.seq,
+                    &LIMIT_BUFFER,
+                ],
+            )
+            .await?;
         debug!("next rows:{:?}", rows.len());
         for r in rows.iter() {
             let version = Version {
@@ -234,7 +286,7 @@ impl Consumer {
                 data,
             })
         }
-        t.commit()?;
+        t.commit().await?;
 
         if let Some(res) = self.buf.pop_front() {
             self.last_seen_offset = res.version;
@@ -246,34 +298,31 @@ impl Consumer {
         }
     }
 
-    pub fn wait_next(&mut self) -> Result<Entry> {
-        let conn = self.pool.get()?;
-        let listen = conn.prepare_cached(LISTEN)?;
-        listen.execute(&[])?;
+    pub async fn wait_next(&mut self) -> Result<Entry> {
+        self.client.execute(LISTEN, &[]).await?;
         loop {
-            let notifications = conn.notifications();
-            while let Some(n) = notifications.iter().next()? {
-                debug!("Saw previous notification: {:?}", n);
-            }
-            if let Some(entry) = self.poll_item(&conn)? {
+            if let Some(entry) = self.poll_item().await? {
                 return Ok(entry);
             }
             debug!("Awaiting notifications");
-            if let Some(n) = notifications.blocking_iter().next()? {
-                debug!("Saw new notification:{:?}", n);
-            }
+            self.notify.notified().await;
         }
     }
 
-    pub fn wait_until_visible(&self, version: Version, timeout: time::Duration) -> Result<()> {
+    pub async fn wait_until_visible(
+        &self,
+        version: Version,
+        timeout: time::Duration,
+    ) -> Result<()> {
         let deadline = time::Instant::now() + timeout;
-        let conn = self.pool.get()?;
-        let listen = conn.prepare_cached(LISTEN)?;
-        listen.execute(&[])?;
+        let listen = self.client.prepare(LISTEN).await?;
+        self.client.execute(&listen, &[]).await?;
         for backoff in 0..64 {
             trace!("Checking for visibility of: {:?}", version,);
-            let (is_visible, txmin, tx_current) = conn
-                .query(IS_VISIBLE, &[&version.tx_id])?
+            let (is_visible, txmin, tx_current) = self
+                .client
+                .query(IS_VISIBLE, &[&version.tx_id])
+                .await?
                 .into_iter()
                 .next()
                 .map(|r| (r.get::<_, bool>(0), r.get::<_, i64>(1), r.get::<_, i64>(2)))
@@ -296,7 +345,7 @@ impl Consumer {
             }
 
             let remaining = deadline - now;
-            let backoff = time::Duration::from_millis((2u64).pow(backoff));
+            let backoff = Duration::from_millis((2u64).pow(backoff));
             let sleep = std::cmp::min(remaining, backoff);
             trace!(
                 "remaining: {:?}; backoff: {:?}; Pause for: {:?}",
@@ -304,18 +353,21 @@ impl Consumer {
                 sleep,
                 sleep
             );
-            std::thread::sleep(sleep);
+            delay_for(sleep).await;
         }
 
         Ok(())
     }
 
-    pub fn commit_upto(&self, entry: &Entry) -> Result<()> {
-        let conn = self.pool.get()?;
-        let t = conn.transaction()?;
-        let upsert = t.prepare_cached(UPSERT_CONSUMER_OFFSET)?;
-        upsert.execute(&[&self.name, &entry.version.tx_id, &entry.version.seq])?;
-        t.commit()?;
+    pub async fn commit_upto(&mut self, entry: &Entry) -> Result<()> {
+        let t = self.client.transaction().await?;
+        let upsert = t.prepare(UPSERT_CONSUMER_OFFSET).await?;
+        t.execute(
+            &upsert,
+            &[&self.name, &entry.version.tx_id, &entry.version.seq],
+        )
+        .await?;
+        t.commit().await?;
         trace!(
             "Persisted position for consumer {:?}: {:?}",
             self.name,
@@ -324,21 +376,20 @@ impl Consumer {
         Ok(())
     }
 
-    pub fn discard_upto(&self, limit: Version) -> Result<()> {
-        let conn = self.pool.get()?;
-        let t = conn.transaction()?;
-        let discard = t.prepare_cached(DISCARD_ENTRIES)?;
-        discard.execute(&[&limit.tx_id, &limit.seq])?;
-        t.commit()?;
+    pub async fn discard_upto(&mut self, limit: Version) -> Result<()> {
+        let t = self.client.transaction().await?;
+        let discard = t.prepare(DISCARD_ENTRIES).await?;
+        t.execute(&discard, &[&limit.tx_id, &limit.seq]).await?;
+        t.commit().await?;
         Ok(())
     }
-    pub fn consumers(&self) -> Result<BTreeMap<String, Version>> {
-        let conn = self.pool.get()?;
-        let t = conn.transaction()?;
-        let list = t.prepare_cached(LIST_CONSUMERS)?;
-        let rows = list.query(&[])?;
 
-        Ok(rows
+    pub async fn consumers(&mut self) -> Result<BTreeMap<String, Version>> {
+        let t = self.client.transaction().await?;
+        let list = t.prepare(LIST_CONSUMERS).await?;
+        let rows = t.query(&list, &[]).await?;
+
+        let consumers = rows
             .iter()
             .map(|r| {
                 (
@@ -349,15 +400,22 @@ impl Consumer {
                     },
                 )
             })
-            .collect())
-    }
-    pub fn clear_offset(&mut self) -> Result<()> {
-        let conn = self.pool.get()?;
-        let t = conn.transaction()?;
-        let discard = t.prepare_cached(DISCARD_CONSUMER)?;
+            .collect();
+        t.commit().await?;
 
-        discard.execute(&[&self.name])?;
-        t.commit()?;
+        Ok(consumers)
+    }
+    pub async fn clear_offset(&mut self) -> Result<()> {
+        let t = self.client.transaction().await?;
+        let discard = t.prepare(DISCARD_CONSUMER).await?;
+        t.execute(&discard, &[&self.name]).await?;
+        t.commit().await?;
         Ok(())
+    }
+}
+
+impl fmt::Debug for Consumer {
+    fn fmt(&self, _fmt: &mut fmt::Formatter) -> fmt::Result {
+        unimplemented!()
     }
 }
