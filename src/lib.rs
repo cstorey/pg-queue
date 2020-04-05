@@ -373,6 +373,14 @@ impl Consumer {
         Ok(())
     }
 
+    pub async fn discard_consumed(&mut self) -> Result<()> {
+        let consumers = self.consumers().await?;
+        if let Some(min_ver) = consumers.into_iter().map(|(_, v)| v).min() {
+            self.discard_upto(min_ver).await?;
+        }
+        Ok(())
+    }
+
     pub async fn consumers(&mut self) -> Result<BTreeMap<String, Version>> {
         let t = self.client.transaction().await?;
         let rows = t.query(LIST_CONSUMERS, &[]).await?;
