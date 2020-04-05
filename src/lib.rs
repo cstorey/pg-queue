@@ -18,10 +18,10 @@ use tokio_postgres::{self, AsyncMessage, Client, Connection};
 const LIMIT_BUFFER: i64 = 1024;
 
 static INSERT_ROW_SQL: &'static str =
-    "INSERT INTO logs (key, body) values($1, $2) RETURNING tx_id, id";
+    "INSERT INTO logs (key, body) values($1, $2) RETURNING tx_id as tx_position, id as position";
 static SEND_NOTIFY_SQL: &'static str = "SELECT pg_notify('logs', $1 :: text)";
 static FETCH_NEXT_ROW: &'static str = "\
-    SELECT tx_id, id, key, body, written_at
+    SELECT tx_id as tx_position, id as position, key, body, written_at
     FROM logs
     WHERE (tx_id, id) > ($1, $2)
     AND tx_id < txid_snapshot_xmin(txid_current_snapshot())
@@ -114,8 +114,8 @@ impl<'a> Batch<'a> {
         let id = rows
             .iter()
             .map(|r| Version {
-                tx_id: r.get::<_, i64>("tx_id"),
-                seq: r.get::<_, i64>("id"),
+                tx_id: r.get::<_, i64>("tx_position"),
+                seq: r.get::<_, i64>("position"),
             })
             .next()
             .ok_or_else(|| Error::NoRowsFromInsert)?;
@@ -272,8 +272,8 @@ impl Consumer {
         debug!("next rows:{:?}", rows.len());
         for r in rows.iter() {
             let version = Version {
-                tx_id: r.get("tx_id"),
-                seq: r.get("id"),
+                tx_id: r.get("tx_position"),
+                seq: r.get("position"),
             };
             let key: Vec<u8> = r.get("key");
             let data: Vec<u8> = r.get("body");
