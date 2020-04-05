@@ -784,6 +784,7 @@ async fn can_discard_consumed() {
             .await
             .expect("wait for version");
         let entry = cons.poll().await.expect("poll").expect("some entry");
+        assert_eq!(String::from_utf8_lossy(&entry.data), "0");
         cons.commit_upto(&entry).await.expect("commit");
     }
 
@@ -793,6 +794,11 @@ async fn can_discard_consumed() {
             .await
             .expect("consumer");
         cons.discard_consumed().await.expect("discard");
+
+        println!(
+            "Consumers: {:#?}",
+            cons.consumers().await.expect("consumers")
+        );
     }
 
     {
@@ -801,7 +807,7 @@ async fn can_discard_consumed() {
             .await
             .expect("consumer");
         let entry = cons.poll().await.expect("poll").expect("some entry");
-        assert_eq!(&entry.data, b"1");
+        assert_eq!(String::from_utf8_lossy(&entry.data), "1");
     }
 }
 
