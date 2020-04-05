@@ -762,6 +762,72 @@ async fn can_discard_on_empty() {
 }
 
 #[tokio::test]
+async fn can_discard_consumed() {
+    env_logger::try_init().unwrap_or(());
+    setup("can_discard_consumed").await;
+
+    let (mut client, conn) = connect("can_discard_consumed").await.expect("connect");
+    tokio::spawn(conn);
+    pg_queue::produce(&mut client, b"key", b"0")
+        .await
+        .expect("produce");
+    let v = pg_queue::produce(&mut client, b"key", b"1")
+        .await
+        .expect("produce");
+
+    {
+        let (client, conn) = connect("can_discard_consumed").await.expect("connect");
+        let mut cons = pg_queue::Consumer::new(conn, client, "one")
+            .await
+            .expect("consumer");
+        cons.wait_until_visible(v, time::Duration::from_secs(1))
+            .await
+            .expect("wait for version");
+        let entry = cons.poll().await.expect("poll").expect("some entry");
+        assert_eq!(String::from_utf8_lossy(&entry.data), "0");
+        cons.commit_upto(&entry).await.expect("commit");
+    }
+
+    {
+        let (client, conn) = connect("can_discard_consumed").await.expect("connect");
+        let mut cons = pg_queue::Consumer::new(conn, client, "cleaner")
+            .await
+            .expect("consumer");
+        cons.discard_consumed().await.expect("discard");
+
+        println!(
+            "Consumers: {:#?}",
+            cons.consumers().await.expect("consumers")
+        );
+    }
+
+    {
+        let (client, conn) = connect("can_discard_consumed").await.expect("connect");
+        let mut cons = pg_queue::Consumer::new(conn, client, "two")
+            .await
+            .expect("consumer");
+        let entry = cons.poll().await.expect("poll").expect("some entry");
+        assert_eq!(String::from_utf8_lossy(&entry.data), "1");
+    }
+}
+
+#[tokio::test]
+async fn can_discard_consumed_on_empty() {
+    env_logger::try_init().unwrap_or(());
+    setup("can_discard_consumed_on_empty").await;
+
+    let (client, conn) = connect("can_discard_consumed_on_empty")
+        .await
+        .expect("connect");
+    {
+        let mut cons = pg_queue::Consumer::new(conn, client, "cleaner")
+            .await
+            .expect("consumer");
+        cons.discard_consumed().await.expect("discard");
+    }
+}
+
+#[tokio::test]
 async fn can_discard_after_written() {
     env_logger::try_init().unwrap_or(());
     setup("can_discard_after_written").await;
@@ -783,6 +849,78 @@ async fn can_discard_after_written() {
         cons.discard_upto(pg_queue::Version::default())
             .await
             .expect("discard");
+    }
+}
+
+#[tokio::test]
+async fn can_discard_consumed_without_losing_entries() {
+    env_logger::try_init().unwrap_or(());
+    setup("can_discard_consumed_without_losing_entries").await;
+
+    let (mut client, conn) = connect("can_discard_consumed_without_losing_entries")
+        .await
+        .expect("connect");
+    tokio::spawn(conn);
+    let _ = pg_queue::produce(&mut client, b"key", b"0")
+        .await
+        .expect("produce");
+    let v1 = pg_queue::produce(&mut client, b"key", b"1")
+        .await
+        .expect("produce");
+    let v2 = pg_queue::produce(&mut client, b"key", b"2")
+        .await
+        .expect("produce");
+
+    {
+        let (client, conn) = connect("can_discard_consumed_without_losing_entries")
+            .await
+            .expect("connect");
+        let mut cons = pg_queue::Consumer::new(conn, client, "one")
+            .await
+            .expect("consumer");
+        cons.wait_until_visible(v1, time::Duration::from_secs(1))
+            .await
+            .expect("wait for version");
+        let _ = cons.poll().await.expect("poll").expect("some entry");
+        let entry = cons.poll().await.expect("poll").expect("some entry");
+        debug_assert_eq!(v1, entry.version);
+        cons.commit_upto(&entry).await.expect("commit");
+    }
+
+    {
+        let (client, conn) = connect("can_discard_consumed_without_losing_entries")
+            .await
+            .expect("connect");
+        let mut cons = pg_queue::Consumer::new(conn, client, "two")
+            .await
+            .expect("consumer");
+        let _ = cons.poll().await.expect("poll").expect("some entry");
+        let _ = cons.poll().await.expect("poll").expect("some entry");
+        let entry = cons.poll().await.expect("poll").expect("some entry");
+        debug_assert_eq!(v2, entry.version);
+        cons.commit_upto(&entry).await.expect("commit");
+    }
+
+    {
+        let (client, conn) = connect("can_discard_consumed_without_losing_entries")
+            .await
+            .expect("connect");
+        let mut cons = pg_queue::Consumer::new(conn, client, "cleaner")
+            .await
+            .expect("consumer");
+
+        cons.discard_consumed().await.expect("discard consumed");
+    }
+
+    {
+        let (client, conn) = connect("can_discard_consumed_without_losing_entries")
+            .await
+            .expect("connect");
+        let mut cons = pg_queue::Consumer::new(conn, client, "one")
+            .await
+            .expect("consumer");
+        let entry = cons.poll().await.expect("poll").expect("some entry");
+        assert_eq!(v2, entry.version);
     }
 }
 

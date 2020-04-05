@@ -34,8 +34,7 @@ static IS_VISIBLE: &'static str = "\
     SELECT $1 < xmin as lt_xmin, xmin, current FROM snapshot";
 static DISCARD_ENTRIES: &'static str = "DELETE FROM logs WHERE (tx_id, id) <= ($1, $2)";
 
-static UPSERT_CONSUMER_OFFSET: &'static str =
-    "INSERT INTO log_consumer_positions (name, \
+static UPSERT_CONSUMER_OFFSET: &'static str = "INSERT INTO log_consumer_positions (name, \
      tx_position, position) values ($1, $2, $3) ON CONFLICT (name) DO \
      UPDATE SET tx_position = EXCLUDED.tx_position, position = EXCLUDED.position";
 static FETCH_CONSUMER_POSITION: &'static str =
@@ -371,6 +370,17 @@ impl Consumer {
         t.execute(DISCARD_ENTRIES, &[&limit.tx_id, &limit.seq])
             .await?;
         t.commit().await?;
+        Ok(())
+    }
+
+    pub async fn discard_consumed(&mut self) -> Result<()> {
+        let t = self.client.transaction().await?;
+        let rows = t.query(LIST_CONSUMERS, &[]).await?;
+        if let Some(min_version) = rows.into_iter().map(|r| Version::from_row(&r)).min() {
+            t.execute(DISCARD_ENTRIES, &[&min_version.tx_id, &min_version.seq])
+                .await?;
+            t.commit().await?;
+        }
         Ok(())
     }
 
