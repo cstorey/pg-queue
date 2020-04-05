@@ -113,10 +113,7 @@ impl<'a> Batch<'a> {
             .await?;
         let id = rows
             .iter()
-            .map(|r| Version {
-                tx_id: r.get::<_, i64>("tx_position"),
-                seq: r.get::<_, i64>("position"),
-            })
+            .map(|r| Version::from_row(r))
             .next()
             .ok_or_else(|| Error::NoRowsFromInsert)?;
 
@@ -196,12 +193,9 @@ impl Consumer {
         };
         debug!("next rows:{:?}", rows.len());
         let position = rows
-            .iter()
+            .into_iter()
             .next()
-            .map(|r| Version {
-                tx_id: r.get("tx_position"),
-                seq: r.get("position"),
-            })
+            .map(|r| Version::from_row(&r))
             .unwrap_or(Version {
                 tx_id: 0,
                 seq: -1i64,
@@ -270,11 +264,8 @@ impl Consumer {
             )
             .await?;
         debug!("next rows:{:?}", rows.len());
-        for r in rows.iter() {
-            let version = Version {
-                tx_id: r.get("tx_position"),
-                seq: r.get("position"),
-            };
+        for r in rows.into_iter() {
+            let version = Version::from_row(&r);
             let key: Vec<u8> = r.get("key");
             let data: Vec<u8> = r.get("body");
             let written_at = r.get("written_at");
@@ -396,14 +387,11 @@ impl Consumer {
         let rows = t.query(&list, &[]).await?;
 
         let consumers = rows
-            .iter()
+            .into_iter()
             .map(|r| {
                 (
                     r.get("name"),
-                    Version {
-                        tx_id: r.get("tx_position"),
-                        seq: r.get("position"),
-                    },
+                    Version::from_row(&r),
                 )
             })
             .collect();
@@ -423,5 +411,14 @@ impl Consumer {
 impl fmt::Debug for Consumer {
     fn fmt(&self, _fmt: &mut fmt::Formatter) -> fmt::Result {
         unimplemented!()
+    }
+}
+
+impl Version {
+    fn from_row(row:&tokio_postgres::Row) -> Self {
+        Version {
+            tx_id: row.get("tx_position"),
+            seq: row.get("position"),
+        }
     }
 }
