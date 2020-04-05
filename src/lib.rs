@@ -18,10 +18,10 @@ use tokio_postgres::{self, AsyncMessage, Client, Connection};
 const LIMIT_BUFFER: i64 = 1024;
 
 static INSERT_ROW_SQL: &'static str =
-    "INSERT INTO logs (key, body) values($1, $2) RETURNING tx_id, id";
+    "INSERT INTO logs (key, body) values($1, $2) RETURNING tx_id as tx_position, id as position";
 static SEND_NOTIFY_SQL: &'static str = "SELECT pg_notify('logs', $1 :: text)";
 static FETCH_NEXT_ROW: &'static str = "\
-    SELECT tx_id, id, key, body, written_at
+    SELECT tx_id as tx_position, id as position, key, body, written_at
     FROM logs
     WHERE (tx_id, id) > ($1, $2)
     AND tx_id < txid_snapshot_xmin(txid_current_snapshot())
@@ -31,7 +31,7 @@ static IS_VISIBLE: &'static str = "\
         select txid_snapshot_xmin(txid_current_snapshot()) as xmin,
         txid_current() as current
     )
-    SELECT $1 < xmin, xmin, current FROM snapshot";
+    SELECT $1 < xmin as lt_xmin, xmin, current FROM snapshot";
 static DISCARD_ENTRIES: &'static str = "DELETE FROM logs WHERE (tx_id, id) <= ($1, $2)";
 
 static UPSERT_CONSUMER_OFFSET: &'static str =
@@ -113,10 +113,7 @@ impl<'a> Batch<'a> {
             .await?;
         let id = rows
             .iter()
-            .map(|r| Version {
-                tx_id: r.get::<_, i64>(0),
-                seq: r.get::<_, i64>(1),
-            })
+            .map(|r| Version::from_row(r))
             .next()
             .ok_or_else(|| Error::NoRowsFromInsert)?;
 
@@ -181,8 +178,7 @@ impl Consumer {
     ) -> Result<Self> {
         let rows_f = async {
             let t = client.transaction().await?;
-            let stmt = t.prepare(FETCH_CONSUMER_POSITION).await?;
-            let rows = t.query(&stmt, &[&name]).await?;
+            let rows = t.query(FETCH_CONSUMER_POSITION, &[&name]).await?;
             t.commit().await?;
             Ok::<_, tokio_postgres::Error>(rows)
         };
@@ -196,16 +192,10 @@ impl Consumer {
         };
         debug!("next rows:{:?}", rows.len());
         let position = rows
-            .iter()
+            .into_iter()
             .next()
-            .map(|r| Version {
-                tx_id: r.get(0),
-                seq: r.get(1),
-            })
-            .unwrap_or(Version {
-                tx_id: 0,
-                seq: -1i64,
-            });
+            .map(|r| Version::from_row(&r))
+            .unwrap_or_else(Version::default);
 
         trace!("Loaded position for consumer {:?}: {:?}", name, position);
 
@@ -258,10 +248,9 @@ impl Consumer {
         }
 
         let t = self.client.transaction().await?;
-        let next_row = t.prepare(FETCH_NEXT_ROW).await?;
         let rows = t
             .query(
-                &next_row,
+                FETCH_NEXT_ROW,
                 &[
                     &self.last_seen_offset.tx_id,
                     &self.last_seen_offset.seq,
@@ -270,14 +259,11 @@ impl Consumer {
             )
             .await?;
         debug!("next rows:{:?}", rows.len());
-        for r in rows.iter() {
-            let version = Version {
-                tx_id: r.get(0),
-                seq: r.get(1),
-            };
-            let key: Vec<u8> = r.get(2);
-            let data: Vec<u8> = r.get(3);
-            let written_at = r.get(4);
+        for r in rows.into_iter() {
+            let version = Version::from_row(&r);
+            let key: Vec<u8> = r.get("key");
+            let data: Vec<u8> = r.get("body");
+            let written_at = r.get("written_at");
             debug!("buffering id: {:?}", version);
             self.buf.push_back(Entry {
                 version,
@@ -315,8 +301,7 @@ impl Consumer {
         timeout: time::Duration,
     ) -> Result<()> {
         let deadline = time::Instant::now() + timeout;
-        let listen = self.client.prepare(LISTEN).await?;
-        self.client.execute(&listen, &[]).await?;
+        self.client.execute(LISTEN, &[]).await?;
         for backoff in 0..64 {
             trace!("Checking for visibility of: {:?}", version,);
             let (is_visible, txmin, tx_current) = self
@@ -325,7 +310,13 @@ impl Consumer {
                 .await?
                 .into_iter()
                 .next()
-                .map(|r| (r.get::<_, bool>(0), r.get::<_, i64>(1), r.get::<_, i64>(2)))
+                .map(|r| {
+                    (
+                        r.get::<_, bool>("lt_xmin"),
+                        r.get::<_, i64>("xmin"),
+                        r.get::<_, i64>("current"),
+                    )
+                })
                 .ok_or_else(|| Error::NoRowsFromVisibilityCheck)?;
             trace!(
                 "Visibility check: is_visible:{:?}; xmin:{:?}; current: {:?}",
@@ -361,9 +352,8 @@ impl Consumer {
 
     pub async fn commit_upto(&mut self, entry: &Entry) -> Result<()> {
         let t = self.client.transaction().await?;
-        let upsert = t.prepare(UPSERT_CONSUMER_OFFSET).await?;
         t.execute(
-            &upsert,
+            UPSERT_CONSUMER_OFFSET,
             &[&self.name, &entry.version.tx_id, &entry.version.seq],
         )
         .await?;
@@ -378,37 +368,28 @@ impl Consumer {
 
     pub async fn discard_upto(&mut self, limit: Version) -> Result<()> {
         let t = self.client.transaction().await?;
-        let discard = t.prepare(DISCARD_ENTRIES).await?;
-        t.execute(&discard, &[&limit.tx_id, &limit.seq]).await?;
+        t.execute(DISCARD_ENTRIES, &[&limit.tx_id, &limit.seq])
+            .await?;
         t.commit().await?;
         Ok(())
     }
 
     pub async fn consumers(&mut self) -> Result<BTreeMap<String, Version>> {
         let t = self.client.transaction().await?;
-        let list = t.prepare(LIST_CONSUMERS).await?;
-        let rows = t.query(&list, &[]).await?;
+        let rows = t.query(LIST_CONSUMERS, &[]).await?;
 
         let consumers = rows
-            .iter()
-            .map(|r| {
-                (
-                    r.get(0),
-                    Version {
-                        tx_id: r.get(1),
-                        seq: r.get(2),
-                    },
-                )
-            })
+            .into_iter()
+            .map(|r| (r.get("name"), Version::from_row(&r)))
             .collect();
         t.commit().await?;
 
         Ok(consumers)
     }
+
     pub async fn clear_offset(&mut self) -> Result<()> {
         let t = self.client.transaction().await?;
-        let discard = t.prepare(DISCARD_CONSUMER).await?;
-        t.execute(&discard, &[&self.name]).await?;
+        t.execute(DISCARD_CONSUMER, &[&self.name]).await?;
         t.commit().await?;
         Ok(())
     }
@@ -417,5 +398,14 @@ impl Consumer {
 impl fmt::Debug for Consumer {
     fn fmt(&self, _fmt: &mut fmt::Formatter) -> fmt::Result {
         unimplemented!()
+    }
+}
+
+impl Version {
+    fn from_row(row: &tokio_postgres::Row) -> Self {
+        Version {
+            tx_id: row.get("tx_position"),
+            seq: row.get("position"),
+        }
     }
 }
