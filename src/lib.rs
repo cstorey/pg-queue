@@ -196,10 +196,7 @@ impl Consumer {
             .into_iter()
             .next()
             .map(|r| Version::from_row(&r))
-            .unwrap_or(Version {
-                tx_id: 0,
-                seq: -1i64,
-            });
+            .unwrap_or_else(Version::default);
 
         trace!("Loaded position for consumer {:?}: {:?}", name, position);
 
