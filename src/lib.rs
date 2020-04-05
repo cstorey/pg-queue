@@ -178,8 +178,7 @@ impl Consumer {
     ) -> Result<Self> {
         let rows_f = async {
             let t = client.transaction().await?;
-            let stmt = t.prepare(FETCH_CONSUMER_POSITION).await?;
-            let rows = t.query(&stmt, &[&name]).await?;
+            let rows = t.query(FETCH_CONSUMER_POSITION, &[&name]).await?;
             t.commit().await?;
             Ok::<_, tokio_postgres::Error>(rows)
         };
@@ -249,10 +248,9 @@ impl Consumer {
         }
 
         let t = self.client.transaction().await?;
-        let next_row = t.prepare(FETCH_NEXT_ROW).await?;
         let rows = t
             .query(
-                &next_row,
+                FETCH_NEXT_ROW,
                 &[
                     &self.last_seen_offset.tx_id,
                     &self.last_seen_offset.seq,
@@ -303,8 +301,7 @@ impl Consumer {
         timeout: time::Duration,
     ) -> Result<()> {
         let deadline = time::Instant::now() + timeout;
-        let listen = self.client.prepare(LISTEN).await?;
-        self.client.execute(&listen, &[]).await?;
+        self.client.execute(LISTEN, &[]).await?;
         for backoff in 0..64 {
             trace!("Checking for visibility of: {:?}", version,);
             let (is_visible, txmin, tx_current) = self
@@ -355,9 +352,8 @@ impl Consumer {
 
     pub async fn commit_upto(&mut self, entry: &Entry) -> Result<()> {
         let t = self.client.transaction().await?;
-        let upsert = t.prepare(UPSERT_CONSUMER_OFFSET).await?;
         t.execute(
-            &upsert,
+            UPSERT_CONSUMER_OFFSET,
             &[&self.name, &entry.version.tx_id, &entry.version.seq],
         )
         .await?;
@@ -372,34 +368,28 @@ impl Consumer {
 
     pub async fn discard_upto(&mut self, limit: Version) -> Result<()> {
         let t = self.client.transaction().await?;
-        let discard = t.prepare(DISCARD_ENTRIES).await?;
-        t.execute(&discard, &[&limit.tx_id, &limit.seq]).await?;
+        t.execute(DISCARD_ENTRIES, &[&limit.tx_id, &limit.seq])
+            .await?;
         t.commit().await?;
         Ok(())
     }
 
     pub async fn consumers(&mut self) -> Result<BTreeMap<String, Version>> {
         let t = self.client.transaction().await?;
-        let list = t.prepare(LIST_CONSUMERS).await?;
-        let rows = t.query(&list, &[]).await?;
+        let rows = t.query(LIST_CONSUMERS, &[]).await?;
 
         let consumers = rows
             .into_iter()
-            .map(|r| {
-                (
-                    r.get("name"),
-                    Version::from_row(&r),
-                )
-            })
+            .map(|r| (r.get("name"), Version::from_row(&r)))
             .collect();
         t.commit().await?;
 
         Ok(consumers)
     }
+
     pub async fn clear_offset(&mut self) -> Result<()> {
         let t = self.client.transaction().await?;
-        let discard = t.prepare(DISCARD_CONSUMER).await?;
-        t.execute(&discard, &[&self.name]).await?;
+        t.execute(DISCARD_CONSUMER, &[&self.name]).await?;
         t.commit().await?;
         Ok(())
     }
@@ -412,7 +402,7 @@ impl fmt::Debug for Consumer {
 }
 
 impl Version {
-    fn from_row(row:&tokio_postgres::Row) -> Self {
+    fn from_row(row: &tokio_postgres::Row) -> Self {
         Version {
             tx_id: row.get("tx_position"),
             seq: row.get("position"),
