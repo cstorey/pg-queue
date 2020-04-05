@@ -31,7 +31,7 @@ static IS_VISIBLE: &'static str = "\
         select txid_snapshot_xmin(txid_current_snapshot()) as xmin,
         txid_current() as current
     )
-    SELECT $1 < xmin, xmin, current FROM snapshot";
+    SELECT $1 < xmin as lt_xmin, xmin, current FROM snapshot";
 static DISCARD_ENTRIES: &'static str = "DELETE FROM logs WHERE (tx_id, id) <= ($1, $2)";
 
 static UPSERT_CONSUMER_OFFSET: &'static str =
@@ -114,8 +114,8 @@ impl<'a> Batch<'a> {
         let id = rows
             .iter()
             .map(|r| Version {
-                tx_id: r.get::<_, i64>(0),
-                seq: r.get::<_, i64>(1),
+                tx_id: r.get::<_, i64>("tx_id"),
+                seq: r.get::<_, i64>("id"),
             })
             .next()
             .ok_or_else(|| Error::NoRowsFromInsert)?;
@@ -199,8 +199,8 @@ impl Consumer {
             .iter()
             .next()
             .map(|r| Version {
-                tx_id: r.get(0),
-                seq: r.get(1),
+                tx_id: r.get("tx_position"),
+                seq: r.get("position"),
             })
             .unwrap_or(Version {
                 tx_id: 0,
@@ -272,12 +272,12 @@ impl Consumer {
         debug!("next rows:{:?}", rows.len());
         for r in rows.iter() {
             let version = Version {
-                tx_id: r.get(0),
-                seq: r.get(1),
+                tx_id: r.get("tx_id"),
+                seq: r.get("id"),
             };
-            let key: Vec<u8> = r.get(2);
-            let data: Vec<u8> = r.get(3);
-            let written_at = r.get(4);
+            let key: Vec<u8> = r.get("key");
+            let data: Vec<u8> = r.get("body");
+            let written_at = r.get("written_at");
             debug!("buffering id: {:?}", version);
             self.buf.push_back(Entry {
                 version,
@@ -325,7 +325,13 @@ impl Consumer {
                 .await?
                 .into_iter()
                 .next()
-                .map(|r| (r.get::<_, bool>(0), r.get::<_, i64>(1), r.get::<_, i64>(2)))
+                .map(|r| {
+                    (
+                        r.get::<_, bool>("lt_xmin"),
+                        r.get::<_, i64>("xmin"),
+                        r.get::<_, i64>("current"),
+                    )
+                })
                 .ok_or_else(|| Error::NoRowsFromVisibilityCheck)?;
             trace!(
                 "Visibility check: is_visible:{:?}; xmin:{:?}; current: {:?}",
@@ -393,10 +399,10 @@ impl Consumer {
             .iter()
             .map(|r| {
                 (
-                    r.get(0),
+                    r.get("name"),
                     Version {
-                        tx_id: r.get(1),
-                        seq: r.get(2),
+                        tx_id: r.get("tx_position"),
+                        seq: r.get("position"),
                     },
                 )
             })
