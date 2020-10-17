@@ -16,6 +16,6 @@ futures = "0.3.4"
 futures-util = "0.3.4"
 
 [dev-dependencies]
-env_logger = "0.7.1"
+env_logger = "0.8.1"
 tokio = {version="0.2.11", features=["macros", "rt-core", "dns"]}
 anyhow = "1.0.26"
