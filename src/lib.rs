@@ -11,7 +11,7 @@ use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     sync::Notify,
-    time::{delay_for, Duration},
+    time::{sleep, Duration},
 };
 use tokio_postgres::{self, AsyncMessage, Client, Connection};
 
@@ -226,7 +226,7 @@ impl Consumer {
                 AsyncMessage::Notice(err) => info!("Db notice: {}", err),
                 AsyncMessage::Notification(n) => {
                     debug!("Received notification: {:?}", n);
-                    notify.notify();
+                    notify.notify_one();
                 }
                 _ => debug!("Other message received"),
             }
@@ -336,14 +336,14 @@ impl Consumer {
 
             let remaining = deadline - now;
             let backoff = Duration::from_millis((2u64).pow(backoff));
-            let sleep = std::cmp::min(remaining, backoff);
+            let pause = std::cmp::min(remaining, backoff);
             trace!(
                 "remaining: {:?}; backoff: {:?}; Pause for: {:?}",
                 remaining,
-                sleep,
-                sleep
+                backoff,
+                pause
             );
-            delay_for(sleep).await;
+            sleep(pause).await;
         }
 
         Ok(())

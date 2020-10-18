@@ -7,15 +7,16 @@ edition = "2018"
 
 [dependencies]
 log = "0.4.8"
-tokio-postgres = { version = "0.5.2" }
+tokio-postgres = "0.6.0"
 chrono = "0.4.7"
 thiserror = "1.0.9"
-tokio = {version="0.2.11", features=["sync"]}
+tokio = { version = "0.3.0", features = ["sync"] }
 postgres-types = { version="0.1.0", features=["with-chrono-0_4"]}
 futures = "0.3.4"
 futures-util = "0.3.4"
+tokio-util = "0.4.0"
 
 [dev-dependencies]
 env_logger = "0.8.1"
-tokio = {version="0.2.11", features=["macros", "rt-core", "dns"]}
+tokio = {version="0.3.0", features=["macros", "rt"]}
 anyhow = "1.0.26"
