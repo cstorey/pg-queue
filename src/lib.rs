@@ -185,7 +185,7 @@ impl Consumer {
         let rows = tokio::select! {
             res = (&mut conn) => {
                 let () = res?;
-                return Err(Error::ConnectionExited.into());
+                return Err(Error::ConnectionExited);
             },
             rows = rows_f => { rows? },
         };
@@ -315,8 +315,7 @@ impl Consumer {
                         r.get::<_, i64>("xmin"),
                         r.get::<_, i64>("current"),
                     )
-                })
-                .ok_or_else(|| Error::NoRowsFromVisibilityCheck)?;
+                }).ok_or(Error::NoRowsFromVisibilityCheck)?;
             trace!(
                 "Visibility check: is_visible:{:?}; xmin:{:?}; current: {:?}",
                 is_visible,
