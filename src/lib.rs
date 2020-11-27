@@ -19,7 +19,7 @@ const LIMIT_BUFFER: i64 = 1024;
 
 static INSERT_ROW_SQL: &str =
     "INSERT INTO logs (key, body) values($1, $2) RETURNING tx_id as tx_position, id as position";
-static SEND_NOTIFY_SQL: &str = "SELECT pg_notify('logs', $1 :: text)";
+static SEND_NOTIFY_SQL: &str = "SELECT pg_notify('logs', '')";
 static FETCH_NEXT_ROW: &str = "\
     SELECT tx_id as tx_position, id as position, key, body, written_at
     FROM logs
@@ -37,11 +37,10 @@ static DISCARD_ENTRIES: &str = "DELETE FROM logs WHERE (tx_id, id) <= ($1, $2)";
 static UPSERT_CONSUMER_OFFSET: &str = "INSERT INTO log_consumer_positions (name, \
      tx_position, position) values ($1, $2, $3) ON CONFLICT (name) DO \
      UPDATE SET tx_position = EXCLUDED.tx_position, position = EXCLUDED.position";
-     static FETCH_CONSUMER_POSITION: &str =
-     "SELECT tx_position, position FROM log_consumer_positions WHERE \
+static FETCH_CONSUMER_POSITION: &str =
+    "SELECT tx_position, position FROM log_consumer_positions WHERE \
      name = $1";
-static LIST_CONSUMERS: &str =
-    "SELECT name, tx_position, position FROM log_consumer_positions";
+static LIST_CONSUMERS: &str = "SELECT name, tx_position, position FROM log_consumer_positions";
 static DISCARD_CONSUMER: &str = "DELETE FROM log_consumer_positions WHERE name = $1";
 static CREATE_TABLE_SQL: &str = include_str!("schema.sql");
 
@@ -86,12 +85,11 @@ pub async fn setup(conn: &Client) -> Result<()> {
 
 pub struct Batch<'a> {
     transaction: tokio_postgres::Transaction<'a>,
-    last_version: Option<Version>,
     insert: tokio_postgres::Statement,
 }
 
 pub async fn produce(client: &mut Client, key: &[u8], body: &[u8]) -> Result<Version> {
-    let mut batch = batch(client).await?;
+    let batch = batch(client).await?;
     let version = batch.produce(key, body).await?;
     batch.commit().await?;
     Ok(version)
@@ -102,17 +100,13 @@ pub async fn batch(client: &mut Client) -> Result<Batch<'_>> {
     let insert = t.prepare(INSERT_ROW_SQL).await?;
     Ok(Batch {
         transaction: t,
-        last_version: None,
         insert,
     })
 }
 
 impl<'a> Batch<'a> {
-    pub async fn produce(&mut self, key: &[u8], body: &[u8]) -> Result<Version> {
-        let rows = self
-            .transaction
-            .query(&self.insert, &[&key, &body])
-            .await?;
+    pub async fn produce(&self, key: &[u8], body: &[u8]) -> Result<Version> {
+        let rows = self.transaction.query(&self.insert, &[&key, &body]).await?;
         let id = rows
             .iter()
             .map(|r| Version::from_row(r))
@@ -120,8 +114,6 @@ impl<'a> Batch<'a> {
             .ok_or(Error::NoRowsFromInsert)?;
 
         trace!("id: {:?}", id);
-        self.last_version = Some(id);
-        trace!("Wrote: {:?}", body.len());
         Ok(id)
     }
 
@@ -134,17 +126,9 @@ impl<'a> Batch<'a> {
         // However, because it's _really_ awkward_ to get a reference to both
         // a client and it's transaction, we do this inside the transaction
         // and hope for the best.
-        let Batch {
-            transaction,
-            last_version,
-            ..
-        } = self;
-        if let Some(id) = last_version {
-            // We never actually parse the version, it's just a nice to have.
-            let vers = format!("{}", id.seq);
-            transaction.query(SEND_NOTIFY_SQL, &[&vers]).await?;
-            trace!("Sent notify for id: {:?}", id);
-        }
+        let Batch { transaction, .. } = self;
+        transaction.query(SEND_NOTIFY_SQL, &[]).await?;
+        trace!("Sent notify");
         transaction.commit().await?;
         trace!("Committed");
 
@@ -261,7 +245,7 @@ impl Consumer {
                 ],
             )
             .await?;
-            trace!("next rows:{:?}", rows.len());
+        trace!("next rows:{:?}", rows.len());
         for r in rows.into_iter() {
             let version = Version::from_row(&r);
             let key: Vec<u8> = r.get("key");
@@ -319,7 +303,8 @@ impl Consumer {
                         r.get::<_, i64>("xmin"),
                         r.get::<_, i64>("current"),
                     )
-                }).ok_or(Error::NoRowsFromVisibilityCheck)?;
+                })
+                .ok_or(Error::NoRowsFromVisibilityCheck)?;
             trace!(
                 "Visibility check: is_visible:{:?}; xmin:{:?}; current: {:?}",
                 is_visible,
