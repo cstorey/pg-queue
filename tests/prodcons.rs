@@ -1,6 +1,10 @@
 #[macro_use]
 extern crate log;
 
+use futures::{
+    stream::{self, StreamExt, TryStreamExt},
+    FutureExt,
+};
 use tokio_postgres::{self, Client, Connection, NoTls};
 
 use anyhow::{Error, Result};
@@ -222,7 +226,7 @@ async fn can_produce_in_batches() {
     tokio::spawn(conn);
 
     let v = {
-        let mut batch = pg_queue::batch(&mut client).await.expect("batch");
+        let batch = pg_queue::batch(&mut client).await.expect("batch");
         batch.produce(b"a", b"0").await.expect("produce");
         batch.produce(b"a", b"1").await.expect("produce");
         let v = batch.produce(b"a", b"2").await.expect("produce");
@@ -262,7 +266,7 @@ async fn can_rollback_batches() {
     tokio::spawn(conn);
 
     let v = {
-        let mut batch = pg_queue::batch(&mut client).await.expect("batch");
+        let batch = pg_queue::batch(&mut client).await.expect("batch");
         batch.produce(b"a", b"0").await.expect("produce");
         batch.produce(b"a", b"1").await.expect("produce");
         let v = batch.produce(b"key", b"2").await.expect("produce");
@@ -521,7 +525,7 @@ async fn producing_concurrently_should_never_leave_holes() {
         .expect("connect");
     tokio::spawn(conn);
 
-    let mut b1 = pg_queue::batch(&mut client1).await.expect("batch b1");
+    let b1 = pg_queue::batch(&mut client1).await.expect("batch b1");
     let v = b1.produce(b"key", b"first").await.expect("produce 1");
 
     {
@@ -530,7 +534,7 @@ async fn producing_concurrently_should_never_leave_holes() {
             .expect("connect");
         tokio::spawn(conn);
 
-        let mut b2 = pg_queue::batch(&mut client2).await.expect("batch b2");
+        let b2 = pg_queue::batch(&mut client2).await.expect("batch b2");
         b2.produce(b"key", b"second").await.expect("produce 2");
         b2.commit().await.expect("commit b1");
     }
@@ -1103,4 +1107,56 @@ async fn can_read_timestamp() {
         start,
         error
     );
+}
+
+#[tokio::test]
+async fn can_batch_produce_concurrently() {
+    env_logger::try_init().unwrap_or(());
+    setup("can_batch_produce_concurrently").await;
+
+    let (client, conn) = connect("can_batch_produce_concurrently")
+        .await
+        .expect("connect");
+    let mut cons = pg_queue::Consumer::new(conn, client, "default")
+        .await
+        .expect("consumer");
+
+    let (mut client, conn) = connect("can_batch_produce_concurrently")
+        .await
+        .expect("connect");
+    tokio::spawn(conn);
+
+    let batch = pg_queue::batch(&mut client).await.expect("batch");
+
+    let nitems: usize = 1024;
+    let items = (0..nitems).map(|i| i.to_string()).collect::<Vec<_>>();
+
+    let versions = stream::iter(items.iter())
+        .map(|it| {
+            batch
+                .produce(b"test", it.as_bytes())
+                .inspect(move |res| println!("Produced From: {:?} → {:?}", it, res))
+        })
+        .buffered(nitems)
+        .try_collect::<Vec<_>>()
+        .await
+        .expect("versions");
+
+    batch.commit().await.expect("commit");
+
+    println!("Versions: {:?}", versions);
+
+    let max_ver = versions.iter().cloned().max().expect("some version");
+
+    cons.wait_until_visible(max_ver, time::Duration::from_secs(1))
+        .await
+        .expect("wait for version");
+
+    let mut observed = Vec::new();
+
+    while let Some(item) = cons.poll().await.expect("item") {
+        observed.push(String::from_utf8(item.data).expect("from utf8"));
+    }
+
+    assert_eq!(items, observed);
 }

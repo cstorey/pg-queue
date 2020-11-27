@@ -89,7 +89,7 @@ pub struct Batch<'a> {
 }
 
 pub async fn produce(client: &mut Client, key: &[u8], body: &[u8]) -> Result<Version> {
-    let mut batch = batch(client).await?;
+    let batch = batch(client).await?;
     let version = batch.produce(key, body).await?;
     batch.commit().await?;
     Ok(version)
@@ -105,7 +105,7 @@ pub async fn batch(client: &mut Client) -> Result<Batch<'_>> {
 }
 
 impl<'a> Batch<'a> {
-    pub async fn produce(&mut self, key: &[u8], body: &[u8]) -> Result<Version> {
+    pub async fn produce(&self, key: &[u8], body: &[u8]) -> Result<Version> {
         let rows = self.transaction.query(&self.insert, &[&key, &body]).await?;
         let id = rows
             .iter()
