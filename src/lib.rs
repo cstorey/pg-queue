@@ -17,35 +17,35 @@ use tokio_postgres::{self, AsyncMessage, Client, Connection};
 
 const LIMIT_BUFFER: i64 = 1024;
 
-static INSERT_ROW_SQL: &'static str =
+static INSERT_ROW_SQL: &str =
     "INSERT INTO logs (key, body) values($1, $2) RETURNING tx_id as tx_position, id as position";
-static SEND_NOTIFY_SQL: &'static str = "SELECT pg_notify('logs', $1 :: text)";
-static FETCH_NEXT_ROW: &'static str = "\
+static SEND_NOTIFY_SQL: &str = "SELECT pg_notify('logs', $1 :: text)";
+static FETCH_NEXT_ROW: &str = "\
     SELECT tx_id as tx_position, id as position, key, body, written_at
     FROM logs
     WHERE (tx_id, id) > ($1, $2)
     AND tx_id < txid_snapshot_xmin(txid_current_snapshot())
     LIMIT $3";
-static IS_VISIBLE: &'static str = "\
+static IS_VISIBLE: &str = "\
     WITH snapshot as (
         select txid_snapshot_xmin(txid_current_snapshot()) as xmin,
         txid_current() as current
     )
     SELECT $1 < xmin as lt_xmin, xmin, current FROM snapshot";
-static DISCARD_ENTRIES: &'static str = "DELETE FROM logs WHERE (tx_id, id) <= ($1, $2)";
+static DISCARD_ENTRIES: &str = "DELETE FROM logs WHERE (tx_id, id) <= ($1, $2)";
 
-static UPSERT_CONSUMER_OFFSET: &'static str = "INSERT INTO log_consumer_positions (name, \
+static UPSERT_CONSUMER_OFFSET: &str = "INSERT INTO log_consumer_positions (name, \
      tx_position, position) values ($1, $2, $3) ON CONFLICT (name) DO \
      UPDATE SET tx_position = EXCLUDED.tx_position, position = EXCLUDED.position";
-static FETCH_CONSUMER_POSITION: &'static str =
-    "SELECT tx_position, position FROM log_consumer_positions WHERE \
+     static FETCH_CONSUMER_POSITION: &str =
+     "SELECT tx_position, position FROM log_consumer_positions WHERE \
      name = $1";
-static LIST_CONSUMERS: &'static str =
+static LIST_CONSUMERS: &str =
     "SELECT name, tx_position, position FROM log_consumer_positions";
-static DISCARD_CONSUMER: &'static str = "DELETE FROM log_consumer_positions WHERE name = $1";
-static CREATE_TABLE_SQL: &'static str = include_str!("schema.sql");
+static DISCARD_CONSUMER: &str = "DELETE FROM log_consumer_positions WHERE name = $1";
+static CREATE_TABLE_SQL: &str = include_str!("schema.sql");
 
-static LISTEN: &'static str = "LISTEN logs";
+static LISTEN: &str = "LISTEN logs";
 
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Version {
@@ -114,7 +114,7 @@ impl<'a> Batch<'a> {
             .iter()
             .map(|r| Version::from_row(r))
             .next()
-            .ok_or_else(|| Error::NoRowsFromInsert)?;
+            .ok_or(Error::NoRowsFromInsert)?;
 
         debug!("id: {:?}", id);
         self.last_version = Some(id);
