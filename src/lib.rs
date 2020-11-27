@@ -37,11 +37,10 @@ static DISCARD_ENTRIES: &str = "DELETE FROM logs WHERE (tx_id, id) <= ($1, $2)";
 static UPSERT_CONSUMER_OFFSET: &str = "INSERT INTO log_consumer_positions (name, \
      tx_position, position) values ($1, $2, $3) ON CONFLICT (name) DO \
      UPDATE SET tx_position = EXCLUDED.tx_position, position = EXCLUDED.position";
-     static FETCH_CONSUMER_POSITION: &str =
-     "SELECT tx_position, position FROM log_consumer_positions WHERE \
+static FETCH_CONSUMER_POSITION: &str =
+    "SELECT tx_position, position FROM log_consumer_positions WHERE \
      name = $1";
-static LIST_CONSUMERS: &str =
-    "SELECT name, tx_position, position FROM log_consumer_positions";
+static LIST_CONSUMERS: &str = "SELECT name, tx_position, position FROM log_consumer_positions";
 static DISCARD_CONSUMER: &str = "DELETE FROM log_consumer_positions WHERE name = $1";
 static CREATE_TABLE_SQL: &str = include_str!("schema.sql");
 
@@ -109,10 +108,7 @@ pub async fn batch(client: &mut Client) -> Result<Batch<'_>> {
 
 impl<'a> Batch<'a> {
     pub async fn produce(&mut self, key: &[u8], body: &[u8]) -> Result<Version> {
-        let rows = self
-            .transaction
-            .query(&self.insert, &[&key, &body])
-            .await?;
+        let rows = self.transaction.query(&self.insert, &[&key, &body]).await?;
         let id = rows
             .iter()
             .map(|r| Version::from_row(r))
@@ -261,7 +257,7 @@ impl Consumer {
                 ],
             )
             .await?;
-            trace!("next rows:{:?}", rows.len());
+        trace!("next rows:{:?}", rows.len());
         for r in rows.into_iter() {
             let version = Version::from_row(&r);
             let key: Vec<u8> = r.get("key");
@@ -319,7 +315,8 @@ impl Consumer {
                         r.get::<_, i64>("xmin"),
                         r.get::<_, i64>("current"),
                     )
-                }).ok_or(Error::NoRowsFromVisibilityCheck)?;
+                })
+                .ok_or(Error::NoRowsFromVisibilityCheck)?;
             trace!(
                 "Visibility check: is_visible:{:?}; xmin:{:?}; current: {:?}",
                 is_visible,
