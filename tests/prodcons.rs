@@ -1,8 +1,6 @@
-use pg_queue;
 #[macro_use]
 extern crate log;
-use chrono;
-use env_logger;
+
 use tokio_postgres::{self, Client, Connection, NoTls};
 
 use anyhow::{Error, Result};
