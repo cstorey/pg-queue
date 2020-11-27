@@ -19,7 +19,7 @@ const LIMIT_BUFFER: i64 = 1024;
 
 static INSERT_ROW_SQL: &str =
     "INSERT INTO logs (key, body) values($1, $2) RETURNING tx_id as tx_position, id as position";
-static SEND_NOTIFY_SQL: &str = "SELECT pg_notify('logs', $1 :: text)";
+static SEND_NOTIFY_SQL: &str = "SELECT pg_notify('logs', '')";
 static FETCH_NEXT_ROW: &str = "\
     SELECT tx_id as tx_position, id as position, key, body, written_at
     FROM logs
@@ -85,7 +85,6 @@ pub async fn setup(conn: &Client) -> Result<()> {
 
 pub struct Batch<'a> {
     transaction: tokio_postgres::Transaction<'a>,
-    last_version: Option<Version>,
     insert: tokio_postgres::Statement,
 }
 
@@ -101,7 +100,6 @@ pub async fn batch(client: &mut Client) -> Result<Batch<'_>> {
     let insert = t.prepare(INSERT_ROW_SQL).await?;
     Ok(Batch {
         transaction: t,
-        last_version: None,
         insert,
     })
 }
@@ -116,8 +114,6 @@ impl<'a> Batch<'a> {
             .ok_or(Error::NoRowsFromInsert)?;
 
         trace!("id: {:?}", id);
-        self.last_version = Some(id);
-        trace!("Wrote: {:?}", body.len());
         Ok(id)
     }
 
@@ -130,17 +126,9 @@ impl<'a> Batch<'a> {
         // However, because it's _really_ awkward_ to get a reference to both
         // a client and it's transaction, we do this inside the transaction
         // and hope for the best.
-        let Batch {
-            transaction,
-            last_version,
-            ..
-        } = self;
-        if let Some(id) = last_version {
-            // We never actually parse the version, it's just a nice to have.
-            let vers = format!("{}", id.seq);
-            transaction.query(SEND_NOTIFY_SQL, &[&vers]).await?;
-            trace!("Sent notify for id: {:?}", id);
-        }
+        let Batch { transaction, .. } = self;
+        transaction.query(SEND_NOTIFY_SQL, &[]).await?;
+        trace!("Sent notify");
         transaction.commit().await?;
         trace!("Committed");
 
