@@ -87,6 +87,7 @@ pub async fn setup(conn: &Client) -> Result<()> {
 pub struct Batch<'a> {
     transaction: tokio_postgres::Transaction<'a>,
     last_version: Option<Version>,
+    insert: tokio_postgres::Statement,
 }
 
 pub async fn produce(client: &mut Client, key: &[u8], body: &[u8]) -> Result<Version> {
@@ -98,9 +99,11 @@ pub async fn produce(client: &mut Client, key: &[u8], body: &[u8]) -> Result<Ver
 
 pub async fn batch(client: &mut Client) -> Result<Batch<'_>> {
     let t = client.transaction().await?;
+    let insert = t.prepare(INSERT_ROW_SQL).await?;
     Ok(Batch {
         transaction: t,
         last_version: None,
+        insert,
     })
 }
 
@@ -108,7 +111,7 @@ impl<'a> Batch<'a> {
     pub async fn produce(&mut self, key: &[u8], body: &[u8]) -> Result<Version> {
         let rows = self
             .transaction
-            .query(INSERT_ROW_SQL, &[&key, &body])
+            .query(&self.insert, &[&key, &body])
             .await?;
         let id = rows
             .iter()
@@ -134,6 +137,7 @@ impl<'a> Batch<'a> {
         let Batch {
             transaction,
             last_version,
+            ..
         } = self;
         if let Some(id) = last_version {
             // We never actually parse the version, it's just a nice to have.
