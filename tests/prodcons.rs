@@ -1,8 +1,6 @@
-use pg_queue;
 #[macro_use]
 extern crate log;
-use chrono;
-use env_logger;
+
 use tokio_postgres::{self, Client, Connection, NoTls};
 
 use anyhow::{Error, Result};
@@ -11,7 +9,7 @@ use std::env;
 use std::thread;
 use std::time;
 
-const DEFAULT_URL: &'static str = "postgres://postgres@localhost/";
+const DEFAULT_URL: &str = "postgres://postgres@localhost/";
 
 async fn configure_schema(client: &mut Client, schema: &str) -> Result<()> {
     loop {

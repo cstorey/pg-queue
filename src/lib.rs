@@ -17,35 +17,35 @@ use tokio_postgres::{self, AsyncMessage, Client, Connection};
 
 const LIMIT_BUFFER: i64 = 1024;
 
-static INSERT_ROW_SQL: &'static str =
+static INSERT_ROW_SQL: &str =
     "INSERT INTO logs (key, body) values($1, $2) RETURNING tx_id as tx_position, id as position";
-static SEND_NOTIFY_SQL: &'static str = "SELECT pg_notify('logs', $1 :: text)";
-static FETCH_NEXT_ROW: &'static str = "\
+static SEND_NOTIFY_SQL: &str = "SELECT pg_notify('logs', $1 :: text)";
+static FETCH_NEXT_ROW: &str = "\
     SELECT tx_id as tx_position, id as position, key, body, written_at
     FROM logs
     WHERE (tx_id, id) > ($1, $2)
     AND tx_id < txid_snapshot_xmin(txid_current_snapshot())
     LIMIT $3";
-static IS_VISIBLE: &'static str = "\
+static IS_VISIBLE: &str = "\
     WITH snapshot as (
         select txid_snapshot_xmin(txid_current_snapshot()) as xmin,
         txid_current() as current
     )
     SELECT $1 < xmin as lt_xmin, xmin, current FROM snapshot";
-static DISCARD_ENTRIES: &'static str = "DELETE FROM logs WHERE (tx_id, id) <= ($1, $2)";
+static DISCARD_ENTRIES: &str = "DELETE FROM logs WHERE (tx_id, id) <= ($1, $2)";
 
-static UPSERT_CONSUMER_OFFSET: &'static str = "INSERT INTO log_consumer_positions (name, \
+static UPSERT_CONSUMER_OFFSET: &str = "INSERT INTO log_consumer_positions (name, \
      tx_position, position) values ($1, $2, $3) ON CONFLICT (name) DO \
      UPDATE SET tx_position = EXCLUDED.tx_position, position = EXCLUDED.position";
-static FETCH_CONSUMER_POSITION: &'static str =
-    "SELECT tx_position, position FROM log_consumer_positions WHERE \
+     static FETCH_CONSUMER_POSITION: &str =
+     "SELECT tx_position, position FROM log_consumer_positions WHERE \
      name = $1";
-static LIST_CONSUMERS: &'static str =
+static LIST_CONSUMERS: &str =
     "SELECT name, tx_position, position FROM log_consumer_positions";
-static DISCARD_CONSUMER: &'static str = "DELETE FROM log_consumer_positions WHERE name = $1";
-static CREATE_TABLE_SQL: &'static str = include_str!("schema.sql");
+static DISCARD_CONSUMER: &str = "DELETE FROM log_consumer_positions WHERE name = $1";
+static CREATE_TABLE_SQL: &str = include_str!("schema.sql");
 
-static LISTEN: &'static str = "LISTEN logs";
+static LISTEN: &str = "LISTEN logs";
 
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Version {
@@ -87,6 +87,7 @@ pub async fn setup(conn: &Client) -> Result<()> {
 pub struct Batch<'a> {
     transaction: tokio_postgres::Transaction<'a>,
     last_version: Option<Version>,
+    insert: tokio_postgres::Statement,
 }
 
 pub async fn produce(client: &mut Client, key: &[u8], body: &[u8]) -> Result<Version> {
@@ -98,9 +99,11 @@ pub async fn produce(client: &mut Client, key: &[u8], body: &[u8]) -> Result<Ver
 
 pub async fn batch(client: &mut Client) -> Result<Batch<'_>> {
     let t = client.transaction().await?;
+    let insert = t.prepare(INSERT_ROW_SQL).await?;
     Ok(Batch {
         transaction: t,
         last_version: None,
+        insert,
     })
 }
 
@@ -108,17 +111,17 @@ impl<'a> Batch<'a> {
     pub async fn produce(&mut self, key: &[u8], body: &[u8]) -> Result<Version> {
         let rows = self
             .transaction
-            .query(INSERT_ROW_SQL, &[&key, &body])
+            .query(&self.insert, &[&key, &body])
             .await?;
         let id = rows
             .iter()
             .map(|r| Version::from_row(r))
             .next()
-            .ok_or_else(|| Error::NoRowsFromInsert)?;
+            .ok_or(Error::NoRowsFromInsert)?;
 
-        debug!("id: {:?}", id);
+        trace!("id: {:?}", id);
         self.last_version = Some(id);
-        debug!("Wrote: {:?}", body.len());
+        trace!("Wrote: {:?}", body.len());
         Ok(id)
     }
 
@@ -134,15 +137,16 @@ impl<'a> Batch<'a> {
         let Batch {
             transaction,
             last_version,
+            ..
         } = self;
         if let Some(id) = last_version {
             // We never actually parse the version, it's just a nice to have.
             let vers = format!("{}", id.seq);
             transaction.query(SEND_NOTIFY_SQL, &[&vers]).await?;
-            debug!("Sent notify for id: {:?}", id);
+            trace!("Sent notify for id: {:?}", id);
         }
         transaction.commit().await?;
-        debug!("Committed");
+        trace!("Committed");
 
         Ok(())
     }
@@ -150,7 +154,7 @@ impl<'a> Batch<'a> {
     pub async fn rollback(self) -> Result<()> {
         let Batch { transaction, .. } = self;
         transaction.rollback().await?;
-        debug!("Rolled back");
+        trace!("Rolled back");
         Ok(())
     }
 }
@@ -185,11 +189,11 @@ impl Consumer {
         let rows = tokio::select! {
             res = (&mut conn) => {
                 let () = res?;
-                return Err(Error::ConnectionExited.into());
+                return Err(Error::ConnectionExited);
             },
             rows = rows_f => { rows? },
         };
-        debug!("next rows:{:?}", rows.len());
+        trace!("next rows:{:?}", rows.len());
         let position = rows
             .into_iter()
             .next()
@@ -225,10 +229,10 @@ impl Consumer {
             match item {
                 AsyncMessage::Notice(err) => info!("Db notice: {}", err),
                 AsyncMessage::Notification(n) => {
-                    debug!("Received notification: {:?}", n);
+                    trace!("Received notification: {:?}", n);
                     notify.notify_one();
                 }
-                _ => debug!("Other message received"),
+                _ => trace!("Other message received"),
             }
         }
 
@@ -257,13 +261,13 @@ impl Consumer {
                 ],
             )
             .await?;
-        debug!("next rows:{:?}", rows.len());
+            trace!("next rows:{:?}", rows.len());
         for r in rows.into_iter() {
             let version = Version::from_row(&r);
             let key: Vec<u8> = r.get("key");
             let data: Vec<u8> = r.get("body");
             let written_at = r.get("written_at");
-            debug!("buffering id: {:?}", version);
+            trace!("buffering id: {:?}", version);
             self.buf.push_back(Entry {
                 version,
                 written_at,
@@ -289,7 +293,7 @@ impl Consumer {
             if let Some(entry) = self.poll_item().await? {
                 return Ok(entry);
             }
-            debug!("Awaiting notifications");
+            trace!("Awaiting notifications");
             self.notify.notified().await;
         }
     }
@@ -315,8 +319,7 @@ impl Consumer {
                         r.get::<_, i64>("xmin"),
                         r.get::<_, i64>("current"),
                     )
-                })
-                .ok_or_else(|| Error::NoRowsFromVisibilityCheck)?;
+                }).ok_or(Error::NoRowsFromVisibilityCheck)?;
             trace!(
                 "Visibility check: is_visible:{:?}; xmin:{:?}; current: {:?}",
                 is_visible,
