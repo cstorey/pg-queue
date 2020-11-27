@@ -116,9 +116,9 @@ impl<'a> Batch<'a> {
             .next()
             .ok_or(Error::NoRowsFromInsert)?;
 
-        debug!("id: {:?}", id);
+        trace!("id: {:?}", id);
         self.last_version = Some(id);
-        debug!("Wrote: {:?}", body.len());
+        trace!("Wrote: {:?}", body.len());
         Ok(id)
     }
 
@@ -139,10 +139,10 @@ impl<'a> Batch<'a> {
             // We never actually parse the version, it's just a nice to have.
             let vers = format!("{}", id.seq);
             transaction.query(SEND_NOTIFY_SQL, &[&vers]).await?;
-            debug!("Sent notify for id: {:?}", id);
+            trace!("Sent notify for id: {:?}", id);
         }
         transaction.commit().await?;
-        debug!("Committed");
+        trace!("Committed");
 
         Ok(())
     }
@@ -150,7 +150,7 @@ impl<'a> Batch<'a> {
     pub async fn rollback(self) -> Result<()> {
         let Batch { transaction, .. } = self;
         transaction.rollback().await?;
-        debug!("Rolled back");
+        trace!("Rolled back");
         Ok(())
     }
 }
@@ -189,7 +189,7 @@ impl Consumer {
             },
             rows = rows_f => { rows? },
         };
-        debug!("next rows:{:?}", rows.len());
+        trace!("next rows:{:?}", rows.len());
         let position = rows
             .into_iter()
             .next()
@@ -225,10 +225,10 @@ impl Consumer {
             match item {
                 AsyncMessage::Notice(err) => info!("Db notice: {}", err),
                 AsyncMessage::Notification(n) => {
-                    debug!("Received notification: {:?}", n);
+                    trace!("Received notification: {:?}", n);
                     notify.notify_one();
                 }
-                _ => debug!("Other message received"),
+                _ => trace!("Other message received"),
             }
         }
 
@@ -257,13 +257,13 @@ impl Consumer {
                 ],
             )
             .await?;
-        debug!("next rows:{:?}", rows.len());
+            trace!("next rows:{:?}", rows.len());
         for r in rows.into_iter() {
             let version = Version::from_row(&r);
             let key: Vec<u8> = r.get("key");
             let data: Vec<u8> = r.get("body");
             let written_at = r.get("written_at");
-            debug!("buffering id: {:?}", version);
+            trace!("buffering id: {:?}", version);
             self.buf.push_back(Entry {
                 version,
                 written_at,
@@ -289,7 +289,7 @@ impl Consumer {
             if let Some(entry) = self.poll_item().await? {
                 return Ok(entry);
             }
-            debug!("Awaiting notifications");
+            trace!("Awaiting notifications");
             self.notify.notified().await;
         }
     }
