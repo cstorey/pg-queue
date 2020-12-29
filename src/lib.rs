@@ -159,22 +159,16 @@ impl Consumer {
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
         T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     >(
-        mut conn: Connection<S, T>,
+        conn: Connection<S, T>,
         mut client: Client,
         name: &str,
     ) -> Result<Self> {
-        let position = tokio::select! {
-            positionp = Self::fetch_consumer_pos(&mut client, name) => { positionp? },
-            res = (&mut conn) => {
-                let () = res?;
-                return Err(Error::ConnectionExited);
-            },
-        };
-
-        trace!("Loaded position for consumer {:?}: {:?}", name, position);
-
         let notify = Arc::new(Notify::new());
         tokio::spawn(Self::run_connection(conn, notify.clone()));
+
+        let position = Self::fetch_consumer_pos(&mut client, name).await?;
+
+        trace!("Loaded position for consumer {:?}: {:?}", name, position);
 
         let consumer = Consumer {
             client,
