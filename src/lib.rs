@@ -152,9 +152,6 @@ pub struct Consumer {
 }
 
 impl Consumer {
-    // We will also need to spawn a process that:
-    // a: spawns a connection into a process that will siphon messages into a queue
-
     pub async fn new<
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
         T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
