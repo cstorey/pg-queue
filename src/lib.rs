@@ -163,26 +163,13 @@ impl Consumer {
         mut client: Client,
         name: &str,
     ) -> Result<Self> {
-        let rows_f = async {
-            let t = client.transaction().await?;
-            let rows = t.query(FETCH_CONSUMER_POSITION, &[&name]).await?;
-            t.commit().await?;
-            Ok::<_, tokio_postgres::Error>(rows)
-        };
-
-        let rows = tokio::select! {
+        let position = tokio::select! {
+            positionp = Self::fetch_consumer_pos(&mut client, name) => { positionp? },
             res = (&mut conn) => {
                 let () = res?;
                 return Err(Error::ConnectionExited);
             },
-            rows = rows_f => { rows? },
         };
-        trace!("next rows:{:?}", rows.len());
-        let position = rows
-            .into_iter()
-            .next()
-            .map(|r| Version::from_row(&r))
-            .unwrap_or_else(Version::default);
 
         trace!("Loaded position for consumer {:?}: {:?}", name, position);
 
@@ -198,6 +185,21 @@ impl Consumer {
         };
 
         Ok(consumer)
+    }
+
+    async fn fetch_consumer_pos(client: &mut Client, name: &str) -> Result<Version> {
+        let t = client.transaction().await?;
+        let rows = t.query(FETCH_CONSUMER_POSITION, &[&name]).await?;
+        t.commit().await?;
+
+        trace!("next rows:{:?}", rows.len());
+        let position = rows
+            .into_iter()
+            .next()
+            .map(|r| Version::from_row(&r))
+            .unwrap_or_else(Version::default);
+
+        Ok(position)
     }
 
     async fn run_connection<
