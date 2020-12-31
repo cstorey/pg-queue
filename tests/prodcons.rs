@@ -885,6 +885,11 @@ async fn can_discard_consumed_without_losing_entries() {
         let mut cons = pg_queue::Consumer::new(conn, client, "two")
             .await
             .expect("consumer");
+
+        cons.wait_until_visible(v2, time::Duration::from_secs(1))
+            .await
+            .expect("wait for version");
+
         let _ = cons.poll().await.expect("poll").expect("some entry");
         let _ = cons.poll().await.expect("poll").expect("some entry");
         let entry = cons.poll().await.expect("poll").expect("some entry");
