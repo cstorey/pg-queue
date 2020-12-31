@@ -1084,9 +1084,9 @@ async fn can_read_timestamp() {
 }
 
 #[tokio::test]
-async fn can_batch_produce_concurrently() {
+async fn can_batch_produce_pipelined() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_batch_produce_concurrently";
+    let schema = "can_batch_produce_pipelined";
     setup(schema).await;
 
     let (client, conn) = connect(schema).await.expect("connect");
