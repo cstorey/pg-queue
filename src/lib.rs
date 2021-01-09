@@ -13,20 +13,30 @@ use tokio::{
     sync::Notify,
     time::{delay_for, Duration},
 };
-use tokio_postgres::{self, AsyncMessage, Client, Connection};
+use tokio_postgres::{self, AsyncMessage, Client, Connection, Transaction};
 
 const LIMIT_BUFFER: i64 = 1024;
 
+// In our SQL, the "current epoch" is defined as either:
+// 1 if is_empty(log)
+// log_head.epoch if log_head.epoch.tx_id < txid_current()
+// log_head.epoch otherwise
+
 static INSERT_ROW_SQL: &str =
-    "INSERT INTO logs (key, body) values($1, $2) RETURNING tx_id as tx_position, id as position";
+    "INSERT INTO logs (epoch, key, body) values($1, $2, $3) RETURNING epoch, tx_id as tx_position, id as position";
+static SAMPLE_HEAD: &str = "\
+    SELECT epoch, tx_id, txid_current() as current_tx_id
+    FROM logs ORDER BY (epoch, tx_id) desc
+    LIMIT 1";
 static SEND_NOTIFY_SQL: &str = "SELECT pg_notify('logs', '')";
+
 static FETCH_NEXT_ROW: &str = "\
-    SELECT tx_id as tx_position, id as position, key, body, written_at
+    SELECT epoch, tx_id as tx_position, id as position, key, body, written_at
     FROM logs
-    WHERE (tx_id, id) > ($1, $2)
-    AND tx_id < txid_snapshot_xmin(txid_current_snapshot())
-    ORDER BY (tx_id, id)
-    LIMIT $3";
+    WHERE (epoch, tx_id, id) > ($1, $2, $3)
+    AND (epoch, tx_id) < ($4, txid_snapshot_xmin(txid_current_snapshot()))
+    ORDER BY (epoch, tx_id, id)
+    LIMIT $5";
 static IS_VISIBLE: &str = "\
     WITH snapshot as (
         select txid_snapshot_xmin(txid_current_snapshot()) as xmin,
@@ -35,13 +45,16 @@ static IS_VISIBLE: &str = "\
     SELECT $1 < xmin as lt_xmin, xmin, current FROM snapshot";
 static DISCARD_ENTRIES: &str = "DELETE FROM logs WHERE (tx_id, id) <= ($1, $2)";
 
-static UPSERT_CONSUMER_OFFSET: &str = "INSERT INTO log_consumer_positions (name, \
-     tx_position, position) values ($1, $2, $3) ON CONFLICT (name) DO \
+static UPSERT_CONSUMER_OFFSET: &str = "\
+     INSERT INTO log_consumer_positions (name, epoch, tx_position, position) \
+     values ($1, $2, $3, $4) \
+     ON CONFLICT (name) DO \
      UPDATE SET tx_position = EXCLUDED.tx_position, position = EXCLUDED.position";
 static FETCH_CONSUMER_POSITION: &str =
-    "SELECT tx_position, position FROM log_consumer_positions WHERE \
+    "SELECT epoch, tx_position, position FROM log_consumer_positions WHERE \
      name = $1";
-static LIST_CONSUMERS: &str = "SELECT name, tx_position, position FROM log_consumer_positions";
+static LIST_CONSUMERS: &str =
+    "SELECT name, epoch, tx_position, position FROM log_consumer_positions";
 static DISCARD_CONSUMER: &str = "DELETE FROM log_consumer_positions WHERE name = $1";
 static CREATE_TABLE_SQL: &str = include_str!("schema.sql");
 
@@ -49,6 +62,7 @@ static LISTEN: &str = "LISTEN logs";
 
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Version {
+    pub epoch: i64,
     pub tx_id: i64,
     pub seq: i64,
 }
@@ -87,6 +101,7 @@ pub async fn setup(conn: &Client) -> Result<()> {
 pub struct Batch<'a> {
     transaction: tokio_postgres::Transaction<'a>,
     insert: tokio_postgres::Statement,
+    epoch: i64,
 }
 
 pub async fn produce(client: &mut Client, key: &[u8], body: &[u8]) -> Result<Version> {
@@ -98,16 +113,40 @@ pub async fn produce(client: &mut Client, key: &[u8], body: &[u8]) -> Result<Ver
 
 pub async fn batch(client: &mut Client) -> Result<Batch<'_>> {
     let t = client.transaction().await?;
+    let epoch = current_epoch(&t).await?;
     let insert = t.prepare(INSERT_ROW_SQL).await?;
     Ok(Batch {
         transaction: t,
         insert,
+        epoch,
     })
+}
+
+async fn current_epoch(t: &Transaction<'_>) -> Result<i64> {
+    if let Some(epoch_row) = t.query_opt(SAMPLE_HEAD, &[]).await? {
+        let head_epoch: i64 = epoch_row.get("epoch");
+        let head_tx_id: i64 = epoch_row.get("tx_id");
+        let current_tx_id: i64 = epoch_row.get("current_tx_id");
+        if current_tx_id >= head_tx_id {
+            return Ok(head_epoch);
+        } else {
+            warn!(
+                "Running behind in epoch {:?}? {:?} > {:?}",
+                head_epoch, current_tx_id, head_tx_id
+            );
+            return Ok(head_epoch + 1);
+        }
+    };
+
+    Ok(1)
 }
 
 impl<'a> Batch<'a> {
     pub async fn produce(&self, key: &[u8], body: &[u8]) -> Result<Version> {
-        let rows = self.transaction.query(&self.insert, &[&key, &body]).await?;
+        let rows = self
+            .transaction
+            .query(&self.insert, &[&self.epoch, &key, &body])
+            .await?;
         let id = rows
             .iter()
             .map(|r| Version::from_row(r))
@@ -229,12 +268,16 @@ impl Consumer {
         }
 
         let t = self.client.transaction().await?;
+        let epoch = current_epoch(&t).await?;
+
         let rows = t
             .query(
                 FETCH_NEXT_ROW,
                 &[
+                    &self.last_seen_offset.epoch,
                     &self.last_seen_offset.tx_id,
                     &self.last_seen_offset.seq,
+                    &epoch,
                     &LIMIT_BUFFER,
                 ],
             )
@@ -335,7 +378,12 @@ impl Consumer {
         let t = self.client.transaction().await?;
         t.execute(
             UPSERT_CONSUMER_OFFSET,
-            &[&self.name, &entry.version.tx_id, &entry.version.seq],
+            &[
+                &self.name,
+                &entry.version.epoch,
+                &entry.version.tx_id,
+                &entry.version.seq,
+            ],
         )
         .await?;
         t.commit().await?;
@@ -396,6 +444,7 @@ impl fmt::Debug for Consumer {
 impl Version {
     fn from_row(row: &tokio_postgres::Row) -> Self {
         Version {
+            epoch: row.get("epoch"),
             tx_id: row.get("tx_position"),
             seq: row.get("position"),
         }
