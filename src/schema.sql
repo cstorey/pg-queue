@@ -49,3 +49,38 @@ DO $$
         END IF;
     END
 $$;
+
+DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT true FROM pg_attribute
+            WHERE attrelid = 'logs'::regclass
+            AND attname = 'epoch'
+            AND NOT attisdropped
+        ) THEN
+            -- BEGIN;
+            ALTER TABLE logs ADD COLUMN epoch BIGINT;
+            UPDATE logs SET epoch = 1 where epoch IS NULL;
+            ALTER TABLE logs ALTER COLUMN epoch SET NOT NULL;
+            -- COMMIT;
+        END IF;
+    END
+$$;
+
+DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT true FROM pg_attribute
+            WHERE attrelid = 'log_consumer_positions'::regclass
+            AND attname = 'epoch'
+            AND NOT attisdropped
+        ) THEN
+            ALTER TABLE log_consumer_positions ADD COLUMN epoch BIGINT;
+            UPDATE log_consumer_positions SET epoch = 1 where epoch IS NULL;
+            ALTER TABLE log_consumer_positions ALTER COLUMN epoch SET NOT NULL;
+        END IF;
+    END
+$$;
+
+CREATE INDEX IF NOT EXISTS logs_epoch_offset_idx ON logs(epoch, tx_id, id);
+DROP INDEX IF EXISTS logs_offset_idx;
