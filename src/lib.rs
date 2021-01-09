@@ -11,7 +11,7 @@ use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     sync::Notify,
-    time::{delay_for, Duration},
+    time::{sleep, Duration},
 };
 use tokio_postgres::{self, AsyncMessage, Client, Connection};
 
@@ -207,7 +207,7 @@ impl Consumer {
                 AsyncMessage::Notice(err) => info!("Db notice: {}", err),
                 AsyncMessage::Notification(n) => {
                     trace!("Received notification: {:?}", n);
-                    notify.notify();
+                    notify.notify_one();
                 }
                 _ => trace!("Other message received"),
             }
@@ -324,7 +324,7 @@ impl Consumer {
                 backoff,
                 pause
             );
-            delay_for(pause).await;
+            sleep(pause).await;
         }
 
         Ok(())
