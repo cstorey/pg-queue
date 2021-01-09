@@ -414,8 +414,8 @@ impl Consumer {
         Ok(())
     }
 
-    pub async fn consumers(&mut self) -> Result<BTreeMap<String, Version>> {
-        let t = self.client.transaction().await?;
+    pub async fn consumers(client: &mut Client) -> Result<BTreeMap<String, Version>> {
+        let t = client.transaction().await?;
         let rows = t.query(LIST_CONSUMERS, &[]).await?;
 
         let consumers = rows

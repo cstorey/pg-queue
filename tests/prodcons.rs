@@ -599,12 +599,12 @@ async fn can_list_zero_consumer_offsets() {
         .await
         .expect("produce");
 
-    let (client, conn) = connect(schema).await.expect("connect");
+    let (mut client, conn) = connect(schema).await.expect("connect");
+    tokio::spawn(conn);
 
-    let mut cons = pg_queue::Consumer::new(conn, client, "one")
+    let offsets = pg_queue::Consumer::consumers(&mut client)
         .await
-        .expect("consumer");
-    let offsets = cons.consumers().await.expect("iter");
+        .expect("iter");
     assert!(offsets.is_empty());
 }
 
@@ -636,11 +636,11 @@ async fn can_list_consumer_offset() {
         cons.commit_upto(&entry).await.expect("commit");
     }
 
-    let (client, conn) = connect(schema).await.expect("connect");
-    let mut cons = pg_queue::Consumer::new(conn, client, "one")
+    let (mut client, conn) = connect(schema).await.expect("connect");
+    tokio::spawn(conn);
+    let offsets = pg_queue::Consumer::consumers(&mut client)
         .await
-        .expect("consumer");
-    let offsets = cons.consumers().await.expect("iter");
+        .expect("iter");
     assert_eq!(offsets.len(), 1);
     assert_eq!(offsets.get("one"), Some(&entry.version));
 }
@@ -688,11 +688,11 @@ async fn can_list_consumer_offsets() {
     expected.insert("one".to_string(), one.version);
     expected.insert("two".to_string(), two.version);
 
-    let (client, conn) = connect(schema).await.expect("connect");
-    let mut cons = pg_queue::Consumer::new(conn, client, "two")
+    let (mut client, conn) = connect(schema).await.expect("connect");
+    tokio::spawn(conn);
+    let offsets = pg_queue::Consumer::consumers(&mut client)
         .await
-        .expect("consumer");
-    let offsets = cons.consumers().await.expect("consumers");
+        .expect("consumers");
     assert_eq!(offsets, expected);
 }
 
@@ -724,11 +724,16 @@ async fn can_discard_entries() {
     }
 
     {
+        let (mut client, conn) = connect(schema).await.expect("connect");
+        tokio::spawn(conn);
+        let one_off = pg_queue::Consumer::consumers(&mut client)
+            .await
+            .expect("consumers")["one"];
+
         let (client, conn) = connect(schema).await.expect("connect");
         let mut cons = pg_queue::Consumer::new(conn, client, "cleaner")
             .await
             .expect("consumer");
-        let one_off = cons.consumers().await.expect("consumers")["one"];
         cons.discard_upto(one_off).await.expect("discard");
     }
 
@@ -793,11 +798,6 @@ async fn can_discard_consumed() {
             .await
             .expect("consumer");
         cons.discard_consumed().await.expect("discard");
-
-        println!(
-            "Consumers: {:#?}",
-            cons.consumers().await.expect("consumers")
-        );
     }
 
     {
@@ -959,11 +959,11 @@ async fn can_remove_consumer_offset() {
         let _ = cons.clear_offset().await.expect("clear_offset");
     }
     {
-        let (client, conn) = connect(schema).await.expect("connect");
-        let mut cons = pg_queue::Consumer::new(conn, client, "default")
+        let (mut client, conn) = connect(schema).await.expect("connect");
+        tokio::spawn(conn);
+        let consumers = pg_queue::Consumer::consumers(&mut client)
             .await
-            .expect("consumer");
-        let consumers = cons.consumers().await.expect("consumers");
+            .expect("consumers");
         assert_eq!(consumers.get("default"), None);
     }
 }
@@ -1005,11 +1005,11 @@ async fn removing_non_consumer_is_noop() {
         cons.clear_offset().await.expect("clear_offset");
     }
     {
-        let (client, conn) = connect(schema).await.expect("connect");
-        let mut cons = pg_queue::Consumer::new(conn, client, "default")
+        let (mut client, conn) = connect(schema).await.expect("connect");
+        tokio::spawn(conn);
+        let consumers = pg_queue::Consumer::consumers(&mut client)
             .await
-            .expect("consumer");
-        let consumers = cons.consumers().await.expect("consumers");
+            .expect("consumers");
         assert_eq!(consumers.get("default"), None);
     }
 }
