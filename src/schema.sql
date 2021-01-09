@@ -81,3 +81,6 @@ DO $$
         END IF;
     END
 $$;
+
+CREATE INDEX IF NOT EXISTS logs_epoch_offset_idx ON logs(epoch, tx_id, id);
+DROP INDEX IF EXISTS logs_offset_idx;
