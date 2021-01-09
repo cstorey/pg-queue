@@ -2,10 +2,13 @@
 extern crate log;
 
 use futures::{
+    pin_mut,
     stream::{self, StreamExt, TryStreamExt},
     FutureExt,
 };
-use tokio_postgres::{self, Client, Connection, NoTls};
+use tokio_postgres::{
+    self, binary_copy::BinaryCopyInWriter, types::Type, Client, Connection, NoTls,
+};
 
 use anyhow::{Error, Result};
 use std::env;
@@ -1173,4 +1176,96 @@ async fn can_batch_produce_with_transaction_then_insert_order() {
     }
 
     assert_eq!(vec!["a-1", "a-2", "b-1", "b-2"], observed);
+}
+
+#[tokio::test]
+async fn can_recover_from_transaction_id_reset() {
+    env_logger::try_init().unwrap_or(());
+    let schema = "can_recover_from_transaction_id_reset";
+    setup(schema).await;
+
+    let (mut client, conn) = connect(schema).await.expect("connect");
+    tokio::spawn(conn);
+
+    let tx = client.transaction().await.expect("BEGIN");
+
+    info!("Restoring from backup");
+    // Assume the backup had advanced to an absurdly high transaction ID.
+    let backup_tx_id = 1_000_000_000_000_000_000i64;
+    let sink = tx
+        .copy_in("COPY logs (epoch, tx_id, id, key, body) FROM STDIN BINARY")
+        .await
+        .expect("copy in logs");
+    let writer = BinaryCopyInWriter::new(
+        sink,
+        &[Type::INT8, Type::INT8, Type::INT8, Type::BYTEA, Type::BYTEA],
+    );
+    pin_mut!(writer);
+    writer
+        .as_mut()
+        .write(&[
+            &23i64,
+            &(backup_tx_id + 1),
+            &10i64,
+            &(b"_" as &[u8]),
+            &(b"first" as &[u8]),
+        ])
+        .await
+        .expect("write row");
+    writer.finish().await.expect("expect finish");
+
+    let sink = tx
+        .copy_in(
+            "COPY log_consumer_positions (epoch, name, position, tx_position) FROM STDIN BINARY",
+        )
+        .await
+        .expect("copy in logs");
+    let writer = BinaryCopyInWriter::new(sink, &[Type::INT8, Type::TEXT, Type::INT8, Type::INT8]);
+    pin_mut!(writer);
+    writer
+        .as_mut()
+        .write(&[&23i64, &"default", &backup_tx_id, &5i64])
+        .await
+        .expect("write row");
+    writer.finish().await.expect("expect finish");
+
+    tx.commit().await.expect("COMMIT");
+
+    info!("Append new entries");
+    let batch = pg_queue::batch(&mut client).await.expect("batch start");
+    let ver = batch.produce(b"_", b"second").await.expect("produce");
+    batch.commit().await.expect("commit");
+    debug!("appended: {:?}", ver);
+
+    let row = client
+        .query_one("SELECT txid_current() as tx_id", &[])
+        .await
+        .expect("read current transction ID");
+    let tx_id: i64 = row.get("tx_id");
+    assert!(
+        tx_id < backup_tx_id,
+        "Current transaction ID {:?} should be behind backup: {:?}",
+        tx_id,
+        backup_tx_id
+    );
+    drop(client);
+
+    info!("Reconnect");
+
+    let (client, conn) = connect(schema).await.expect("connect");
+    let mut cons = pg_queue::Consumer::new(conn, client, "default")
+        .await
+        .expect("consumer");
+
+    cons.wait_until_visible(ver, time::Duration::from_secs(1))
+        .await
+        .expect("wait for version");
+
+    let mut observed = Vec::new();
+
+    while let Some(item) = cons.poll().await.expect("item") {
+        observed.push(String::from_utf8(item.data).expect("from utf8"));
+    }
+
+    assert_eq!(vec!["first", "second"], observed);
 }
