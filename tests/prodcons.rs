@@ -8,10 +8,10 @@ use futures::{
 use tokio_postgres::{self, Client, Connection, NoTls};
 
 use anyhow::{Error, Result};
-use std::collections::BTreeMap;
 use std::env;
 use std::thread;
 use std::time;
+use std::{cmp, collections::BTreeMap};
 
 const DEFAULT_URL: &str = "postgres://postgres@localhost/";
 
@@ -1130,4 +1130,52 @@ async fn can_batch_produce_pipelined() {
     }
 
     assert_eq!(items, observed);
+}
+
+#[tokio::test]
+async fn can_batch_produce_concurrently_with_wall_clock_order() {
+    env_logger::try_init().unwrap_or(());
+    setup("can_batch_produce_concurrently").await;
+
+    let (mut client1, conn) = connect("can_batch_produce_concurrently")
+        .await
+        .expect("connect");
+    tokio::spawn(conn);
+
+    let (mut client2, conn) = connect("can_batch_produce_concurrently")
+        .await
+        .expect("connect");
+    tokio::spawn(conn);
+
+    let batch1 = pg_queue::batch(&mut client1).await.expect("batch");
+    let batch2 = pg_queue::batch(&mut client2).await.expect("batch");
+
+    batch1.produce(b"a", b"1").await.expect("produce");
+    batch2.produce(b"b", b"2").await.expect("produce");
+    let v1 = batch1.produce(b"a", b"3").await.expect("produce");
+    let v2 = batch2.produce(b"b", b"4").await.expect("produce");
+
+    batch1.commit().await.expect("commit");
+    batch2.commit().await.expect("commit");
+
+    println!("Versions: {:?} / {:?}", v1, v2);
+
+    let (client, conn) = connect("can_batch_produce_concurrently")
+        .await
+        .expect("connect");
+    let mut cons = pg_queue::Consumer::new(conn, client, "default")
+        .await
+        .expect("consumer");
+
+    cons.wait_until_visible(cmp::max(v1, v2), time::Duration::from_secs(1))
+        .await
+        .expect("wait for version");
+
+    let mut observed = Vec::new();
+
+    while let Some(item) = cons.poll().await.expect("item") {
+        observed.push(String::from_utf8(item.data).expect("from utf8"));
+    }
+
+    assert_eq!(vec!["1", "2", "3", "4"], observed);
 }
