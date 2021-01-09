@@ -1,4 +1,4 @@
-use std::{fmt, sync::Arc};
+use std::{fmt, sync::Arc, unimplemented};
 
 #[macro_use]
 extern crate log;
@@ -28,6 +28,8 @@ static SAMPLE_HEAD: &str = "\
     SELECT epoch, tx_id, txid_current() as current_tx_id
     FROM logs ORDER BY (epoch, tx_id) desc
     LIMIT 1";
+static CONSUMER_EPOCHS: &str =
+    "SELECT epoch, tx_position as tx_id, txid_current() as current_tx_id FROM log_consumer_positions ORDER BY epoch DESC LIMIT 1";
 static SEND_NOTIFY_SQL: &str = "SELECT pg_notify('logs', '')";
 
 static FETCH_NEXT_ROW: &str = "\
@@ -135,6 +137,21 @@ async fn current_epoch(t: &Transaction<'_>) -> Result<i64> {
                 head_epoch, current_tx_id, head_tx_id
             );
             return Ok(head_epoch + 1);
+        }
+    };
+
+    if let Some(row) = t.query_opt(CONSUMER_EPOCHS, &[]).await? {
+        let epoch = row.get("epoch");
+        let tx_id: i64 = row.get("tx_id");
+        let current_tx_id: i64 = row.get("current_tx_id");
+        if current_tx_id >= tx_id {
+            return Ok(epoch);
+        } else {
+            warn!(
+                "Running behind in epoch {:?}? {:?} > {:?}",
+                epoch, current_tx_id, tx_id
+            );
+            return Ok(epoch + 1);
         }
     };
 

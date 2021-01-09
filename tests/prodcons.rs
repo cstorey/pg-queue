@@ -1179,9 +1179,138 @@ async fn can_batch_produce_with_transaction_then_insert_order() {
 }
 
 #[tokio::test]
-async fn can_recover_from_transaction_id_reset() {
+async fn can_recover_from_restore_without_without_resetting_epoch() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_recover_from_transaction_id_reset";
+    let schema = "can_recover_from_restore_without_without_resetting_epoch";
+    setup(schema).await;
+
+    let (mut client, conn) = connect(schema).await.expect("connect");
+    tokio::spawn(conn);
+
+    let tx = client.transaction().await.expect("BEGIN");
+
+    info!("Restoring from backup");
+    // Assume the backup had advanced to an absurdly high transaction ID.
+    let backup_tx_id = 1i64;
+    let original_epoch = 23i64;
+    let sink = tx
+        .copy_in(
+            "COPY log_consumer_positions (name, epoch, tx_position, position) FROM STDIN BINARY",
+        )
+        .await
+        .expect("copy in logs");
+    let writer = BinaryCopyInWriter::new(sink, &[Type::TEXT, Type::INT8, Type::INT8, Type::INT8]);
+    pin_mut!(writer);
+    writer
+        .as_mut()
+        .write(&[&"default", &original_epoch, &backup_tx_id, &5i64])
+        .await
+        .expect("write row");
+    writer.finish().await.expect("expect finish");
+    tx.commit().await.expect("COMMIT");
+
+    let consumers = pg_queue::Consumer::consumers(&mut client)
+        .await
+        .expect("consumers");
+    info!("Consumer positions: {:?}", consumers);
+    let default_pos = consumers["default"];
+
+    info!("Append new entries");
+    let batch = pg_queue::batch(&mut client).await.expect("batch start");
+    let ver = batch.produce(b"_", b"second").await.expect("produce");
+    batch.commit().await.expect("commit");
+    debug!("appended: {:?}", ver);
+
+    let row = client
+        .query_one("SELECT txid_current() as tx_id", &[])
+        .await
+        .expect("read current transction ID");
+    let tx_id: i64 = row.get("tx_id");
+    assert!(
+        tx_id > backup_tx_id,
+        "Current transaction ID {:?} should be ahead of backup: {:?}",
+        tx_id,
+        backup_tx_id
+    );
+    drop(client);
+
+    assert!(
+        ver > default_pos,
+        "Written item version ({:?}) should happen after default consumer position ({:?})",
+        ver,
+        default_pos,
+    );
+    assert!(ver.epoch == original_epoch);
+}
+
+#[tokio::test]
+async fn can_recover_from_transaction_id_reset_with_only_consumers() {
+    env_logger::try_init().unwrap_or(());
+    let schema = "can_recover_from_transaction_id_reset_with_only_consumers";
+    setup(schema).await;
+
+    let (mut client, conn) = connect(schema).await.expect("connect");
+    tokio::spawn(conn);
+
+    let tx = client.transaction().await.expect("BEGIN");
+
+    info!("Restoring from backup");
+    // Assume the backup had advanced to an absurdly high transaction ID.
+    let backup_tx_id = 1_000_000_000_000_000_000i64;
+    let original_epoch = 23i64;
+    let sink = tx
+        .copy_in(
+            "COPY log_consumer_positions (name, epoch, tx_position, position) FROM STDIN BINARY",
+        )
+        .await
+        .expect("copy in logs");
+    let writer = BinaryCopyInWriter::new(sink, &[Type::TEXT, Type::INT8, Type::INT8, Type::INT8]);
+    pin_mut!(writer);
+    writer
+        .as_mut()
+        .write(&[&"default", &original_epoch, &backup_tx_id, &5i64])
+        .await
+        .expect("write row");
+    writer.finish().await.expect("expect finish");
+    tx.commit().await.expect("COMMIT");
+
+    let consumers = pg_queue::Consumer::consumers(&mut client)
+        .await
+        .expect("consumers");
+    info!("Consumer positions: {:?}", consumers);
+    let default_pos = consumers["default"];
+
+    info!("Append new entries");
+    let batch = pg_queue::batch(&mut client).await.expect("batch start");
+    let ver = batch.produce(b"_", b"second").await.expect("produce");
+    batch.commit().await.expect("commit");
+    debug!("appended: {:?}", ver);
+
+    let row = client
+        .query_one("SELECT txid_current() as tx_id", &[])
+        .await
+        .expect("read current transction ID");
+    let tx_id: i64 = row.get("tx_id");
+    assert!(
+        tx_id < backup_tx_id,
+        "Current transaction ID {:?} should be behind backup: {:?}",
+        tx_id,
+        backup_tx_id
+    );
+    drop(client);
+
+    assert!(
+        ver > default_pos,
+        "Written item version ({:?}) should happen after default consumer position ({:?})",
+        ver,
+        default_pos,
+    )
+}
+
+#[tokio::test]
+async fn can_recover_from_transaction_id_reset_with_entries() {
+    env_logger::try_init().unwrap_or(());
+    let schema = "can_recover_from_transaction_id_reset_with_entries";
     setup(schema).await;
 
     let (mut client, conn) = connect(schema).await.expect("connect");
