@@ -13,7 +13,9 @@ use tokio::{
     sync::Notify,
     time::{sleep, Duration},
 };
-use tokio_postgres::{self, AsyncMessage, Client, Connection, Transaction};
+use tokio_postgres::{
+    self, tls::MakeTlsConnect, AsyncMessage, Client, Config, Connection, Socket, Transaction,
+};
 
 const LIMIT_BUFFER: i64 = 1024;
 
@@ -209,6 +211,15 @@ pub struct Consumer {
 }
 
 impl Consumer {
+    pub async fn connect<T>(config: &Config, tls: T, name: &str) -> Result<Self>
+    where
+        T: MakeTlsConnect<Socket>,
+        T::Stream: Send + 'static,
+    {
+        let (client, conn) = config.connect(tls).await?;
+        Self::new(conn, client, name).await
+    }
+
     pub async fn new<
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
         T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
