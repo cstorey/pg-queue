@@ -220,7 +220,7 @@ impl Consumer {
         Self::new(conn, client, name).await
     }
 
-    pub async fn new<
+    async fn new<
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
         T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     >(
