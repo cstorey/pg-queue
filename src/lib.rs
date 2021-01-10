@@ -13,7 +13,9 @@ use tokio::{
     sync::Notify,
     time::{sleep, Duration},
 };
-use tokio_postgres::{self, AsyncMessage, Client, Connection, Transaction};
+use tokio_postgres::{
+    self, tls::MakeTlsConnect, AsyncMessage, Client, Config, Connection, Socket, Transaction,
+};
 
 const LIMIT_BUFFER: i64 = 1024;
 
@@ -209,17 +211,24 @@ pub struct Consumer {
 }
 
 impl Consumer {
-    pub async fn new<
-        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-        T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-    >(
-        conn: Connection<S, T>,
-        mut client: Client,
-        name: &str,
-    ) -> Result<Self> {
+    pub async fn connect<T>(config: &Config, tls: T, name: &str) -> Result<Self>
+    where
+        T: MakeTlsConnect<Socket>,
+        T::Stream: Send + 'static,
+    {
+        let (client, conn) = config.connect(tls).await?;
+
         let notify = Arc::new(Notify::new());
         tokio::spawn(Self::run_connection(conn, notify.clone()));
 
+        Self::new(notify, client, name).await
+    }
+
+    async fn new(
+        notify: Arc<Notify>,
+        mut client: Client,
+        name: &str,
+    ) -> Result<Self> {
         let position = Self::fetch_consumer_pos(&mut client, name).await?;
 
         trace!("Loaded position for consumer {:?}: {:?}", name, position);
