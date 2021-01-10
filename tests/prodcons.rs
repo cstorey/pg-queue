@@ -83,9 +83,8 @@ async fn can_produce_one() {
     let schema = "can_produce_one";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup(schema).await;
-    let (client, conn) = connect(&pg_config).await.expect("connect");
 
-    let mut cons = pg_queue::Consumer::new(conn, client, "default")
+    let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "default")
         .await
         .expect("consumer");
 
