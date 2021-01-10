@@ -1,3 +1,6 @@
+-- This file is split on empty lines (two consecutive newlines) and each chunk
+-- is run as a single batch.
+
 CREATE TABLE IF NOT EXISTS logs (
     id BIGSERIAL PRIMARY KEY,
     written_at TIMESTAMPTZ NOT NULL DEFAULT now() ,
