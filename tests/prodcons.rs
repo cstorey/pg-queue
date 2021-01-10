@@ -69,12 +69,7 @@ async fn connect(
     let config = load_pg_config(schema)?;
 
     debug!("Use schema name: {}", schema);
-    let (mut client, mut conn) = config.connect(NoTls).await?;
-
-    tokio::select! {
-        res = (&mut conn) => panic!("Connection exited? {:?}", res),
-        res = configure_schema(&mut client, schema) => res.expect("configure schema"),
-    }
+    let (client, mut conn) = config.connect(NoTls).await?;
 
     tokio::select! {
         res = (&mut conn) => panic!("Connection exited? {:?}", res),
@@ -92,6 +87,10 @@ async fn connect(
 async fn setup(schema: &str) {
     let (mut client, conn) = connect(schema).await.expect("connect");
     tokio::spawn(conn);
+
+    configure_schema(&mut client, schema)
+        .await
+        .expect("create schema");
 
     let t = client.transaction().await.expect("BEGIN");
     for table in &["logs", "log_consumer_positions"] {
