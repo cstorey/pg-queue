@@ -8,6 +8,8 @@ jobs:
     - environment:
         POSTGRES_URL: postgres://circleci@localhost:5432/circleci-pg-queue
         RUSTFLAGS: -D warnings
+        # This is a huge hack, but it'll do for now.
+        MERGE_BASE: tokio-0.2
       image: circleci/rust:1-browsers
     - environment:
         POSTGRES_DB: circleci-pg-queue
@@ -19,7 +21,8 @@ jobs:
           upstream=${CIRCLE_REPOSITORY_URL:-$(git remote  get-url origin)}
           git config --global user.email "circleci@invalid.example"
           git config --global user.name "CircleCI build for ${upstream}"
-          git merge --no-edit --no-ff origin/master
+          echo "Merging with: ${MERGE_BASE}"
+          git merge --no-edit --no-ff "origin/${MERGE_BASE}"
     - restore_cache:
         name: "Restore registry index"
         key: registry
