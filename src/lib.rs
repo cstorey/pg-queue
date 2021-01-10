@@ -224,11 +224,7 @@ impl Consumer {
         Self::new(notify, client, name).await
     }
 
-    async fn new(
-        notify: Arc<Notify>,
-        mut client: Client,
-        name: &str,
-    ) -> Result<Self> {
+    async fn new(notify: Arc<Notify>, mut client: Client, name: &str) -> Result<Self> {
         let position = Self::fetch_consumer_pos(&mut client, name).await?;
 
         trace!("Loaded position for consumer {:?}: {:?}", name, position);
