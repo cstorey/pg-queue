@@ -67,20 +67,9 @@ async fn connect(
     Connection<tokio_postgres::Socket, tokio_postgres::tls::NoTlsStream>,
 )> {
     let config = load_pg_config(schema)?;
-
     debug!("Use schema name: {}", schema);
-    let (client, mut conn) = config.connect(NoTls).await?;
 
-    tokio::select! {
-        res = (&mut conn) => panic!("Connection exited? {:?}", res),
-
-        rowsp = client.query("select pg_backend_pid()", &[]) => {
-            let rows = rowsp.expect("rows");
-            let pid : i32 = rows.get(0).expect("some row").get(0);
-            info!("Connected to backend:{:?}", pid);
-        }
-    }
-
+    let (client, conn) = config.connect(NoTls).await?;
     Ok((client, conn))
 }
 
