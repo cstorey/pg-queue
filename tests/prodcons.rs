@@ -54,6 +54,7 @@ async fn configure_schema(client: &mut Client, schema: &str) -> Result<()> {
 fn load_pg_config(schema: &str) -> Result<Config> {
     let url = env::var("POSTGRES_URL").unwrap_or_else(|_| DEFAULT_URL.to_string());
     let mut config: Config = url.parse()?;
+    debug!("Use schema name: {}", schema);
 
     config.options(&format!("-csearch_path={}", schema));
 
@@ -67,7 +68,6 @@ async fn connect(
     Connection<tokio_postgres::Socket, tokio_postgres::tls::NoTlsStream>,
 )> {
     let config = load_pg_config(schema)?;
-    debug!("Use schema name: {}", schema);
 
     let (client, conn) = config.connect(NoTls).await?;
     Ok((client, conn))
