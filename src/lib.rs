@@ -97,7 +97,9 @@ pub enum Error {
 
 pub async fn setup(conn: &Client) -> Result<()> {
     debug!("Running setup SQL");
-    conn.batch_execute(CREATE_TABLE_SQL).await?;
+    for chunk in CREATE_TABLE_SQL.split("\n\n") {
+        conn.batch_execute(chunk.trim()).await?;
+    }
     debug!("Ran setup SQL ok");
     Ok(())
 }
@@ -224,11 +226,7 @@ impl Consumer {
         Self::new(notify, client, name).await
     }
 
-    async fn new(
-        notify: Arc<Notify>,
-        mut client: Client,
-        name: &str,
-    ) -> Result<Self> {
+    async fn new(notify: Arc<Notify>, mut client: Client, name: &str) -> Result<Self> {
         let position = Self::fetch_consumer_pos(&mut client, name).await?;
 
         trace!("Loaded position for consumer {:?}: {:?}", name, position);
