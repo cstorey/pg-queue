@@ -10,7 +10,7 @@ use tokio_postgres::{
     self, binary_copy::BinaryCopyInWriter, types::Type, Client, Config, Connection, NoTls,
 };
 
-use anyhow::{Error, Result};
+use anyhow::Result;
 use std::env;
 use std::thread;
 use std::time;
@@ -90,23 +90,18 @@ async fn connect(
 }
 
 async fn setup(schema: &str) {
-    let (mut client, mut conn) = connect(schema).await.expect("connect");
-    let setup_f = async {
-        let t = client.transaction().await?;
-        for table in &["logs", "log_consumer_positions"] {
-            t.execute(&*format!("DROP TABLE IF EXISTS {}", table), &[])
-                .await?;
-        }
-        t.commit().await?;
+    let (mut client, conn) = connect(schema).await.expect("connect");
+    tokio::spawn(conn);
 
-        pg_queue::setup(&client).await?;
-        Ok::<_, Error>(())
-    };
+    let t = client.transaction().await.expect("BEGIN");
+    for table in &["logs", "log_consumer_positions"] {
+        t.execute(&*format!("DROP TABLE IF EXISTS {}", table), &[])
+            .await
+            .expect("drop table");
+    }
+    t.commit().await.expect("commit");
 
-    tokio::select! {
-        res = (&mut conn) => panic!("Connection exited? {:?}", res),
-        res = setup_f => res.expect("cleanup tables"),
-    };
+    pg_queue::setup(&client).await.expect("setup");
 }
 
 #[tokio::test]
