@@ -10,7 +10,7 @@ use tokio_postgres::{
     self, binary_copy::BinaryCopyInWriter, types::Type, Client, Config, Connection, NoTls,
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::env;
 use std::thread;
 use std::time;
@@ -19,34 +19,24 @@ use std::{cmp, collections::BTreeMap};
 const DEFAULT_URL: &str = "postgres://postgres@localhost/";
 
 async fn configure_schema(client: &mut Client, schema: &str) -> Result<()> {
-    loop {
-        let t = client.transaction().await?;
-        let nschemas: i64 = {
-            let rows = t
-                .query(
-                    "SELECT count(*) from pg_catalog.pg_namespace n where n.nspname = $1",
-                    &[&schema],
-                )
-                .await?;
-            let row = rows.get(0).expect("row 0");
-            row.get(0)
-        };
-        debug!("Number of {} schemas:{}", schema, nschemas);
-        if nschemas == 0 {
-            match t
-                .execute(&*format!("CREATE SCHEMA \"{}\"", schema), &[])
-                .await
-            {
-                Ok(_) => {
-                    t.commit().await?;
-                    break;
-                }
-                Err(e) => warn!("Error creating schema:{:?}: {:?}", schema, e),
-            }
-        } else {
-            break;
-        }
+    let t = client.transaction().await?;
+    let nschemas: i64 = {
+        let rows = t
+            .query(
+                "SELECT count(*) from pg_catalog.pg_namespace n where n.nspname = $1",
+                &[&schema],
+            )
+            .await?;
+        let row = rows.get(0).expect("row 0");
+        row.get(0)
+    };
+    debug!("Number of {} schemas:{}", schema, nschemas);
+    if nschemas == 0 {
+        t.execute(&*format!("CREATE SCHEMA \"{}\"", schema), &[])
+            .await
+            .context("create schema")?;
     }
+    t.commit().await?;
 
     Ok(())
 }
