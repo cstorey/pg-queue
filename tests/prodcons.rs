@@ -7,7 +7,7 @@ use futures::{
     FutureExt,
 };
 use tokio_postgres::{
-    self, binary_copy::BinaryCopyInWriter, types::Type, Client, Connection, NoTls,
+    self, binary_copy::BinaryCopyInWriter, types::Type, Client, Config, Connection, NoTls,
 };
 
 use anyhow::{Error, Result};
@@ -47,10 +47,17 @@ async fn configure_schema(client: &mut Client, schema: &str) -> Result<()> {
             break;
         }
     }
-    client
-        .execute(&*format!("SET search_path TO \"{}\"", schema), &[])
-        .await?;
+
     Ok(())
+}
+
+fn load_pg_config(schema: &str) -> Result<Config> {
+    let url = env::var("POSTGRES_URL").unwrap_or_else(|_| DEFAULT_URL.to_string());
+    let mut config: Config = url.parse()?;
+
+    config.options(&format!("-csearch_path={}", schema));
+
+    Ok(config)
 }
 
 async fn connect(
@@ -59,9 +66,10 @@ async fn connect(
     Client,
     Connection<tokio_postgres::Socket, tokio_postgres::tls::NoTlsStream>,
 )> {
-    let url = env::var("POSTGRES_URL").unwrap_or_else(|_| DEFAULT_URL.to_string());
+    let config = load_pg_config(schema)?;
+
     debug!("Use schema name: {}", schema);
-    let (mut client, mut conn) = tokio_postgres::connect(&*url, NoTls).await?;
+    let (mut client, mut conn) = config.connect(NoTls).await?;
 
     tokio::select! {
         res = (&mut conn) => panic!("Connection exited? {:?}", res),
