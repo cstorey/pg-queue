@@ -18,29 +18,6 @@ use std::{cmp, collections::BTreeMap};
 
 const DEFAULT_URL: &str = "postgres://postgres@localhost/";
 
-async fn configure_schema(client: &mut Client, schema: &str) -> Result<()> {
-    let t = client.transaction().await?;
-    let nschemas: i64 = {
-        let rows = t
-            .query(
-                "SELECT count(*) from pg_catalog.pg_namespace n where n.nspname = $1",
-                &[&schema],
-            )
-            .await?;
-        let row = rows.get(0).expect("row 0");
-        row.get(0)
-    };
-    debug!("Number of {} schemas:{}", schema, nschemas);
-    if nschemas == 0 {
-        t.execute(&*format!("CREATE SCHEMA \"{}\"", schema), &[])
-            .await
-            .context("create schema")?;
-    }
-    t.commit().await?;
-
-    Ok(())
-}
-
 fn load_pg_config(schema: &str) -> Result<Config> {
     let url = env::var("POSTGRES_URL").unwrap_or_else(|_| DEFAULT_URL.to_string());
     let mut config: Config = url.parse()?;
@@ -67,16 +44,18 @@ async fn setup(schema: &str) {
     let (mut client, conn) = connect(schema).await.expect("connect");
     tokio::spawn(conn);
 
-    configure_schema(&mut client, schema)
-        .await
-        .expect("create schema");
-
     let t = client.transaction().await.expect("BEGIN");
-    for table in &["logs", "log_consumer_positions"] {
-        t.execute(&*format!("DROP TABLE IF EXISTS {}", table), &[])
-            .await
-            .expect("drop table");
-    }
+    t.execute(
+        &*format!("DROP SCHEMA IF EXISTS \"{}\" CASCADE", schema),
+        &[],
+    )
+    .await
+    .context("drop schema")
+    .expect("execute");
+    t.execute(&*format!("CREATE SCHEMA \"{}\"", schema), &[])
+        .await
+        .context("create schema")
+        .expect("execute");
     t.commit().await.expect("commit");
 
     pg_queue::setup(&client).await.expect("setup");
