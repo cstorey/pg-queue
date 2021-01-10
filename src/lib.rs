@@ -217,20 +217,18 @@ impl Consumer {
         T::Stream: Send + 'static,
     {
         let (client, conn) = config.connect(tls).await?;
-        Self::new(conn, client, name).await
-    }
 
-    async fn new<
-        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-        T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-    >(
-        conn: Connection<S, T>,
-        mut client: Client,
-        name: &str,
-    ) -> Result<Self> {
         let notify = Arc::new(Notify::new());
         tokio::spawn(Self::run_connection(conn, notify.clone()));
 
+        Self::new(notify, client, name).await
+    }
+
+    async fn new(
+        notify: Arc<Notify>,
+        mut client: Client,
+        name: &str,
+    ) -> Result<Self> {
         let position = Self::fetch_consumer_pos(&mut client, name).await?;
 
         trace!("Loaded position for consumer {:?}: {:?}", name, position);
