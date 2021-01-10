@@ -6,9 +6,7 @@ use futures::{
     stream::{self, StreamExt, TryStreamExt},
     FutureExt,
 };
-use tokio_postgres::{
-    self, binary_copy::BinaryCopyInWriter, types::Type, Client, Config, Connection, NoTls,
-};
+use tokio_postgres::{self, binary_copy::BinaryCopyInWriter, types::Type, Client, Config, NoTls};
 
 use anyhow::{Context, Result};
 use std::env;
@@ -28,21 +26,16 @@ fn load_pg_config(schema: &str) -> Result<Config> {
     Ok(config)
 }
 
-async fn connect(
-    config: &Config,
-) -> Result<(
-    Client,
-    Connection<tokio_postgres::Socket, tokio_postgres::tls::NoTlsStream>,
-)> {
+async fn connect(config: &Config) -> Result<Client> {
     let (client, conn) = config.connect(NoTls).await?;
-    Ok((client, conn))
+    tokio::spawn(conn);
+    Ok(client)
 }
 
 async fn setup(schema: &str) {
     let pg_config = load_pg_config(schema).expect("pg-config");
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
 
     let t = client.transaction().await.expect("BEGIN");
     t.execute(
@@ -87,8 +80,7 @@ async fn can_produce_one() {
         .await
         .expect("consumer");
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
 
     let v = pg_queue::produce(&mut client, b"foo", b"42")
         .await
@@ -125,8 +117,7 @@ async fn can_produce_several() {
         .await
         .expect("consumer");
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
 
     pg_queue::produce(&mut client, b"a", b"0")
         .await
@@ -163,8 +154,7 @@ async fn can_produce_ordered() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup(schema).await;
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
 
     let v0 = pg_queue::produce(&mut client, b"a", b"0")
         .await
@@ -191,8 +181,7 @@ async fn can_produce_in_batches() {
         .await
         .expect("consumer");
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
 
     let v = {
         let batch = pg_queue::batch(&mut client).await.expect("batch");
@@ -232,8 +221,7 @@ async fn can_rollback_batches() {
         .await
         .expect("consumer");
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
 
     let v = {
         let batch = pg_queue::batch(&mut client).await.expect("batch");
@@ -257,8 +245,7 @@ async fn can_produce_incrementally() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup(schema).await;
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
 
     pg_queue::produce(&mut client, b"a", b"0")
         .await
@@ -292,8 +279,7 @@ async fn can_consume_incrementally() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup(schema).await;
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
 
     pg_queue::produce(&mut client, b"key", b"0")
         .await
@@ -341,8 +327,7 @@ async fn can_restart_consume_at_commit_point() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup(schema).await;
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
     pg_queue::produce(&mut client, b"key", b"0")
         .await
         .expect("produce");
@@ -390,8 +375,7 @@ async fn can_progress_without_commit() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup(schema).await;
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
 
     pg_queue::produce(&mut client, b"key", b"0")
         .await
@@ -424,8 +408,7 @@ async fn can_consume_multiply() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup(schema).await;
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
 
     pg_queue::produce(&mut client, b"key", b"0")
         .await
@@ -480,15 +463,13 @@ async fn producing_concurrently_should_never_leave_holes() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup(schema).await;
 
-    let (mut client1, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client1 = connect(&pg_config).await.expect("connect");
 
     let b1 = pg_queue::batch(&mut client1).await.expect("batch b1");
     let v = b1.produce(b"key", b"first").await.expect("produce 1");
 
     {
-        let (mut client2, conn) = connect(&pg_config).await.expect("connect");
-        tokio::spawn(conn);
+        let mut client2 = connect(&pg_config).await.expect("connect");
 
         let b2 = pg_queue::batch(&mut client2).await.expect("batch b2");
         b2.produce(b"key", b"second").await.expect("produce 2");
@@ -545,8 +526,7 @@ async fn can_list_zero_consumer_offsets() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup(schema).await;
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
 
     pg_queue::produce(&mut client, b"key", b"0")
         .await
@@ -555,8 +535,7 @@ async fn can_list_zero_consumer_offsets() {
         .await
         .expect("produce");
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
 
     let offsets = pg_queue::Consumer::consumers(&mut client)
         .await
@@ -571,8 +550,7 @@ async fn can_list_consumer_offset() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup(schema).await;
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
     pg_queue::produce(&mut client, b"key", b"0")
         .await
         .expect("produce");
@@ -592,8 +570,7 @@ async fn can_list_consumer_offset() {
         cons.commit_upto(&entry).await.expect("commit");
     }
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
     let offsets = pg_queue::Consumer::consumers(&mut client)
         .await
         .expect("iter");
@@ -608,8 +585,7 @@ async fn can_list_consumer_offsets() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup(schema).await;
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
     pg_queue::produce(&mut client, b"key", b"0")
         .await
         .expect("produce");
@@ -643,8 +619,7 @@ async fn can_list_consumer_offsets() {
     expected.insert("one".to_string(), one.version);
     expected.insert("two".to_string(), two.version);
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
     let offsets = pg_queue::Consumer::consumers(&mut client)
         .await
         .expect("consumers");
@@ -658,8 +633,7 @@ async fn can_discard_entries() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup(schema).await;
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
     pg_queue::produce(&mut client, b"key", b"0")
         .await
         .expect("produce");
@@ -679,8 +653,7 @@ async fn can_discard_entries() {
     }
 
     {
-        let (mut client, conn) = connect(&pg_config).await.expect("connect");
-        tokio::spawn(conn);
+        let mut client = connect(&pg_config).await.expect("connect");
         let one_off = pg_queue::Consumer::consumers(&mut client)
             .await
             .expect("consumers")["one"];
@@ -720,8 +693,7 @@ async fn can_discard_consumed() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup(schema).await;
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
     pg_queue::produce(&mut client, b"key", b"0")
         .await
         .expect("produce");
@@ -776,8 +748,7 @@ async fn can_discard_after_written() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup(schema).await;
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
     let v = pg_queue::produce(&mut client, b"key", b"0")
         .await
         .expect("produce");
@@ -799,8 +770,7 @@ async fn can_discard_consumed_without_losing_entries() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup(schema).await;
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
     let _ = pg_queue::produce(&mut client, b"key", b"0")
         .await
         .expect("produce");
@@ -864,8 +834,7 @@ async fn can_remove_consumer_offset() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup(schema).await;
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
     pg_queue::produce(&mut client, b"key", b"0")
         .await
         .expect("produce");
@@ -896,8 +865,7 @@ async fn can_remove_consumer_offset() {
         let _ = cons.clear_offset().await.expect("clear_offset");
     }
     {
-        let (mut client, conn) = connect(&pg_config).await.expect("connect");
-        tokio::spawn(conn);
+        let mut client = connect(&pg_config).await.expect("connect");
         let consumers = pg_queue::Consumer::consumers(&mut client)
             .await
             .expect("consumers");
@@ -912,8 +880,7 @@ async fn removing_non_consumer_is_noop() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup(schema).await;
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
     pg_queue::produce(&mut client, b"key", b"0")
         .await
         .expect("produce");
@@ -941,8 +908,7 @@ async fn removing_non_consumer_is_noop() {
         cons.clear_offset().await.expect("clear_offset");
     }
     {
-        let (mut client, conn) = connect(&pg_config).await.expect("connect");
-        tokio::spawn(conn);
+        let mut client = connect(&pg_config).await.expect("connect");
         let consumers = pg_queue::Consumer::consumers(&mut client)
             .await
             .expect("consumers");
@@ -967,8 +933,7 @@ async fn can_produce_consume_with_wait() {
 
     thread::sleep(time::Duration::from_millis(5));
     debug!("Producing");
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
     pg_queue::produce(&mut client, b"key", b"42")
         .await
         .expect("produce");
@@ -993,8 +958,7 @@ async fn can_read_timestamp() {
         .await
         .expect("consumer");
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
     let v = pg_queue::produce(&mut client, b"foo", b"42")
         .await
         .expect("produce");
@@ -1030,8 +994,7 @@ async fn can_batch_produce_pipelined() {
         .await
         .expect("consumer");
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
 
     let batch = pg_queue::batch(&mut client).await.expect("batch");
 
@@ -1075,11 +1038,8 @@ async fn can_batch_produce_with_transaction_then_insert_order() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup(schema).await;
 
-    let (mut client1, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
-
-    let (mut client2, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client1 = connect(&pg_config).await.expect("connect");
+    let mut client2 = connect(&pg_config).await.expect("connect");
 
     let batch1 = pg_queue::batch(&mut client1).await.expect("batch");
     let batch2 = pg_queue::batch(&mut client2).await.expect("batch");
@@ -1117,8 +1077,7 @@ async fn can_recover_from_restore_without_without_resetting_epoch() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup(schema).await;
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
 
     let tx = client.transaction().await.expect("BEGIN");
 
@@ -1183,8 +1142,7 @@ async fn can_recover_from_transaction_id_reset_with_only_consumers() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup(schema).await;
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
 
     let tx = client.transaction().await.expect("BEGIN");
 
@@ -1248,8 +1206,7 @@ async fn can_recover_from_transaction_id_reset_with_entries() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup(schema).await;
 
-    let (mut client, conn) = connect(&pg_config).await.expect("connect");
-    tokio::spawn(conn);
+    let mut client = connect(&pg_config).await.expect("connect");
 
     let tx = client.transaction().await.expect("BEGIN");
 
