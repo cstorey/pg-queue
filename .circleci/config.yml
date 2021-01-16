@@ -9,7 +9,7 @@ jobs:
         POSTGRES_URL: postgres://circleci@localhost:5432/circleci-pg-queue
         RUSTFLAGS: -D warnings
         # This is a huge hack, but it'll do for now.
-        MERGE_BASE: master
+        MERGE_BASE: main
       image: circleci/rust:1-browsers
     - environment:
         POSTGRES_DB: circleci-pg-queue
