@@ -107,6 +107,43 @@ async fn can_produce_one() {
 }
 
 #[tokio::test]
+async fn can_produce_with_metadata() {
+    env_logger::try_init().unwrap_or(());
+    let schema = "can_produce_with_metadata";
+    let pg_config = load_pg_config(schema).expect("pg-config");
+    setup(schema).await;
+
+    let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "default")
+        .await
+        .expect("consumer");
+
+    let mut client = connect(&pg_config).await.expect("connect");
+
+    let v = pg_queue::produce_meta(&mut client, b"foo", Some(b"42-meta".as_ref()), b"42")
+        .await
+        .expect("produce");
+
+    cons.wait_until_visible(v, time::Duration::from_secs(1))
+        .await
+        .expect("wait for version");
+    let it = cons.poll().await.expect("poll");
+    assert_eq!(
+        it.map(|e| (
+            String::from_utf8_lossy(&e.key).to_string(),
+            String::from_utf8_lossy(&e.data).to_string()
+        )),
+        Some(("foo".to_string(), "42".to_string()))
+    );
+    assert_eq!(
+        cons.poll()
+            .await
+            .expect("poll")
+            .map(|e| String::from_utf8_lossy(&e.data).into_owned()),
+        None
+    )
+}
+
+#[tokio::test]
 async fn can_produce_several() {
     env_logger::try_init().unwrap_or(());
     let schema = "can_produce_several";
@@ -207,6 +244,37 @@ async fn can_produce_in_batches() {
         cons.poll().await.expect("poll").map(|e| e.data),
         Some(b"2".to_vec())
     );
+    assert_eq!(cons.poll().await.expect("poll").map(|e| e.data), None)
+}
+
+#[tokio::test]
+async fn can_produce_in_batches_with_metadata() {
+    env_logger::try_init().unwrap_or(());
+    let schema = "can_produce_in_batches_with_metadata";
+    let pg_config = load_pg_config(schema).expect("pg-config");
+    setup(schema).await;
+
+    let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "default")
+        .await
+        .expect("consumer");
+
+    let mut client = connect(&pg_config).await.expect("connect");
+
+    let v = {
+        let batch = pg_queue::batch(&mut client).await.expect("batch");
+        let v = batch
+            .produce_meta(b"a", Some(b"one-meta".as_ref()), b"one")
+            .await
+            .expect("produce");
+        batch.commit().await.expect("commit");
+        v
+    };
+
+    cons.wait_until_visible(v, time::Duration::from_secs(1))
+        .await
+        .expect("wait for version");
+    let item = cons.poll().await.expect("poll ok");
+    assert_eq!(item.and_then(|e| e.meta), Some(b"one-meta".to_vec()));
     assert_eq!(cons.poll().await.expect("poll").map(|e| e.data), None)
 }
 
