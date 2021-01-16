@@ -87,3 +87,16 @@ $$;
 
 CREATE INDEX IF NOT EXISTS logs_epoch_offset_idx ON logs(epoch, tx_id, id);
 DROP INDEX IF EXISTS logs_offset_idx;
+
+DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT true FROM pg_attribute
+            WHERE attrelid = 'logs'::regclass
+            AND attname = 'meta'
+            AND NOT attisdropped
+        ) THEN
+            ALTER TABLE logs ADD COLUMN meta bytea;
+        END IF;
+    END
+$$;
