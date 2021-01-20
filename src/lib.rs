@@ -25,7 +25,7 @@ const LIMIT_BUFFER: i64 = 1024;
 // log_head.epoch otherwise
 
 static INSERT_ROW_SQL: &str =
-    "INSERT INTO logs (epoch, key, body) values($1, $2, $3) RETURNING epoch, tx_id as tx_position, id as position";
+    "INSERT INTO logs (epoch, key, meta, body) values($1, $2, $3, $4) RETURNING epoch, tx_id as tx_position, id as position";
 static SAMPLE_HEAD: &str = "\
     SELECT epoch, tx_id, txid_current() as current_tx_id
     FROM logs ORDER BY (epoch, tx_id) desc
@@ -35,7 +35,7 @@ static CONSUMER_EPOCHS: &str =
 static SEND_NOTIFY_SQL: &str = "SELECT pg_notify('logs', '')";
 
 static FETCH_NEXT_ROW: &str = "\
-    SELECT epoch, tx_id as tx_position, id as position, key, body, written_at
+    SELECT epoch, tx_id as tx_position, id as position, key, meta, body, written_at
     FROM logs
     WHERE (epoch, tx_id, id) > ($1, $2, $3)
     AND (epoch, tx_id) < ($4, txid_snapshot_xmin(txid_current_snapshot()))
@@ -76,6 +76,7 @@ pub struct Entry {
     pub version: Version,
     pub written_at: DateTime<Utc>,
     pub key: Vec<u8>,
+    pub meta: Option<Vec<u8>>,
     pub data: Vec<u8>,
 }
 
@@ -97,7 +98,9 @@ pub enum Error {
 
 pub async fn setup(conn: &Client) -> Result<()> {
     debug!("Running setup SQL");
-    conn.batch_execute(CREATE_TABLE_SQL).await?;
+    for chunk in CREATE_TABLE_SQL.split("\n\n") {
+        conn.batch_execute(chunk.trim()).await?;
+    }
     debug!("Ran setup SQL ok");
     Ok(())
 }
@@ -111,6 +114,18 @@ pub struct Batch<'a> {
 pub async fn produce(client: &mut Client, key: &[u8], body: &[u8]) -> Result<Version> {
     let batch = batch(client).await?;
     let version = batch.produce(key, body).await?;
+    batch.commit().await?;
+    Ok(version)
+}
+
+pub async fn produce_meta(
+    client: &mut Client,
+    key: &[u8],
+    meta: Option<&[u8]>,
+    body: &[u8],
+) -> Result<Version> {
+    let batch = batch(client).await?;
+    let version = batch.produce_meta(key, meta, body).await?;
     batch.commit().await?;
     Ok(version)
 }
@@ -162,9 +177,17 @@ async fn current_epoch(t: &Transaction<'_>) -> Result<i64> {
 
 impl<'a> Batch<'a> {
     pub async fn produce(&self, key: &[u8], body: &[u8]) -> Result<Version> {
+        self.produce_meta(key, None, body).await
+    }
+    pub async fn produce_meta(
+        &self,
+        key: &[u8],
+        meta: Option<&[u8]>,
+        body: &[u8],
+    ) -> Result<Version> {
         let rows = self
             .transaction
-            .query(&self.insert, &[&self.epoch, &key, &body])
+            .query(&self.insert, &[&self.epoch, &key, &meta, &body])
             .await?;
         let id = rows
             .iter()
@@ -224,11 +247,7 @@ impl Consumer {
         Self::new(notify, client, name).await
     }
 
-    async fn new(
-        notify: Arc<Notify>,
-        mut client: Client,
-        name: &str,
-    ) -> Result<Self> {
+    async fn new(notify: Arc<Notify>, mut client: Client, name: &str) -> Result<Self> {
         let position = Self::fetch_consumer_pos(&mut client, name).await?;
 
         trace!("Loaded position for consumer {:?}: {:?}", name, position);
@@ -312,12 +331,14 @@ impl Consumer {
         for r in rows.into_iter() {
             let version = Version::from_row(&r);
             let key: Vec<u8> = r.get("key");
+            let meta: Option<Vec<u8>> = r.get("meta");
             let data: Vec<u8> = r.get("body");
             let written_at = r.get("written_at");
             trace!("buffering id: {:?}", version);
             self.buf.push_back(Entry {
                 version,
                 written_at,
+                meta,
                 key,
                 data,
             })

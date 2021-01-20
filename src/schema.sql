@@ -1,3 +1,6 @@
+-- This file is split on empty lines (two consecutive newlines) and each chunk
+-- is run as a single batch.
+
 CREATE TABLE IF NOT EXISTS logs (
     id BIGSERIAL PRIMARY KEY,
     written_at TIMESTAMPTZ NOT NULL DEFAULT now() ,
@@ -84,3 +87,16 @@ $$;
 
 CREATE INDEX IF NOT EXISTS logs_epoch_offset_idx ON logs(epoch, tx_id, id);
 DROP INDEX IF EXISTS logs_offset_idx;
+
+DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT true FROM pg_attribute
+            WHERE attrelid = 'logs'::regclass
+            AND attname = 'meta'
+            AND NOT attisdropped
+        ) THEN
+            ALTER TABLE logs ADD COLUMN meta bytea;
+        END IF;
+    END
+$$;
