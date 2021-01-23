@@ -28,7 +28,7 @@ static INSERT_ROW_SQL: &str =
     "INSERT INTO logs (epoch, key, meta, body) values($1, $2, $3, $4) RETURNING epoch, tx_id as tx_position, id as position";
 static SAMPLE_HEAD: &str = "\
     SELECT epoch, tx_id, txid_current() as current_tx_id
-    FROM logs ORDER BY (epoch, tx_id) desc
+    FROM logs ORDER BY epoch desc, tx_id desc
     LIMIT 1";
 static CONSUMER_EPOCHS: &str =
     "SELECT epoch, tx_position as tx_id, txid_current() as current_tx_id FROM log_consumer_positions ORDER BY epoch DESC LIMIT 1";
