@@ -39,7 +39,7 @@ static FETCH_NEXT_ROW: &str = "\
     FROM logs
     WHERE (epoch, tx_id, id) > ($1, $2, $3)
     AND (epoch, tx_id) < ($4, txid_snapshot_xmin(txid_current_snapshot()))
-    ORDER BY (epoch, tx_id, id)
+    ORDER BY epoch asc, tx_id asc, id asc
     LIMIT $5";
 static IS_VISIBLE: &str = "\
     WITH snapshot as (
