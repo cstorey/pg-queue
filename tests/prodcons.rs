@@ -1,19 +1,14 @@
-#[macro_use]
-extern crate log;
+use std::{cmp, collections::BTreeMap, env, thread, time};
 
+use anyhow::{Context, Result};
 use futures::{
     pin_mut,
     stream::{self, StreamExt, TryStreamExt},
     FutureExt,
 };
 use pg_queue::logs::{batch, produce, produce_meta, setup, Consumer, Version};
+use log::{debug, info};
 use tokio_postgres::{self, binary_copy::BinaryCopyInWriter, types::Type, Client, Config, NoTls};
-
-use anyhow::{Context, Result};
-use std::env;
-use std::thread;
-use std::time;
-use std::{cmp, collections::BTreeMap};
 
 const DEFAULT_URL: &str = "postgres://postgres@localhost/";
 
