@@ -1,57 +1,18 @@
 #![allow(deprecated)]
 
-use std::{cmp, collections::BTreeMap, env, thread, time};
+use std::{cmp, collections::BTreeMap, thread, time};
 
-use anyhow::{Context, Result};
 use futures::{
     pin_mut,
     stream::{self, StreamExt, TryStreamExt},
     FutureExt,
 };
 use log::{debug, info};
-use tokio_postgres::{self, binary_copy::BinaryCopyInWriter, types::Type, Client, Config, NoTls};
+use tokio_postgres::{self, binary_copy::BinaryCopyInWriter, types::Type, NoTls};
 
-use pg_queue::{batch, produce, produce_meta, setup, Consumer, Version};
+use pg_queue::{batch, produce, produce_meta, Consumer, Version};
 
-const DEFAULT_URL: &str = "postgres://postgres@localhost/";
-
-fn load_pg_config(schema: &str) -> Result<Config> {
-    let url = env::var("POSTGRES_URL").unwrap_or_else(|_| DEFAULT_URL.to_string());
-    let mut config: Config = url.parse()?;
-    debug!("Use schema name: {}", schema);
-
-    config.options(&format!("-csearch_path={}", schema));
-
-    Ok(config)
-}
-
-async fn connect(config: &Config) -> Result<Client> {
-    let (client, conn) = config.connect(NoTls).await?;
-    tokio::spawn(conn);
-    Ok(client)
-}
-
-async fn setup_db(schema: &str) {
-    let pg_config = load_pg_config(schema).expect("pg-config");
-
-    let mut client = connect(&pg_config).await.expect("connect");
-
-    let t = client.transaction().await.expect("BEGIN");
-    t.execute(
-        &*format!("DROP SCHEMA IF EXISTS \"{}\" CASCADE", schema),
-        &[],
-    )
-    .await
-    .context("drop schema")
-    .expect("execute");
-    t.execute(&*format!("CREATE SCHEMA \"{}\"", schema), &[])
-        .await
-        .context("create schema")
-        .expect("execute");
-    t.commit().await.expect("commit");
-
-    setup(&client).await.expect("setup");
-}
+use crate::{connect, load_pg_config, setup_db};
 
 #[tokio::test]
 async fn can_produce_none() {
