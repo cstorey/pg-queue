@@ -9,7 +9,7 @@ use futures::{
 use log::{debug, info};
 use tokio_postgres::{self, binary_copy::BinaryCopyInWriter, types::Type, Client, Config, NoTls};
 
-use pg_queue::logs::{batch, produce, produce_meta, setup, Consumer, Version};
+use pg_queue::logs::{produce, produce_meta, setup, Batch, Consumer, Version};
 
 const DEFAULT_URL: &str = "postgres://postgres@localhost/";
 
@@ -204,7 +204,7 @@ async fn can_produce_in_batches() {
     let mut client = connect(&pg_config).await.expect("connect");
 
     let v = {
-        let batch = batch(&mut client).await.expect("batch");
+        let batch = Batch::begin(&mut client).await.expect("batch");
         batch.produce(b"a", b"0").await.expect("produce");
         batch.produce(b"a", b"1").await.expect("produce");
         let v = batch.produce(b"a", b"2").await.expect("produce");
@@ -244,7 +244,7 @@ async fn can_produce_in_batches_with_metadata() {
     let mut client = connect(&pg_config).await.expect("connect");
 
     let v = {
-        let batch = batch(&mut client).await.expect("batch");
+        let batch = Batch::begin(&mut client).await.expect("batch");
         let v = batch
             .produce_meta(b"a", Some(b"one-meta".as_ref()), b"one")
             .await
@@ -275,7 +275,7 @@ async fn can_rollback_batches() {
     let mut client = connect(&pg_config).await.expect("connect");
 
     let v = {
-        let batch = batch(&mut client).await.expect("batch");
+        let batch = Batch::begin(&mut client).await.expect("batch");
         batch.produce(b"a", b"0").await.expect("produce");
         batch.produce(b"a", b"1").await.expect("produce");
         let v = batch.produce(b"key", b"2").await.expect("produce");
@@ -484,13 +484,13 @@ async fn producing_concurrently_should_never_leave_holes() {
 
     let mut client1 = connect(&pg_config).await.expect("connect");
 
-    let b1 = batch(&mut client1).await.expect("batch b1");
+    let b1 = Batch::begin(&mut client1).await.expect("batch b1");
     let v = b1.produce(b"key", b"first").await.expect("produce 1");
 
     {
         let mut client2 = connect(&pg_config).await.expect("connect");
 
-        let b2 = batch(&mut client2).await.expect("batch b2");
+        let b2 = Batch::begin(&mut client2).await.expect("batch b2");
         b2.produce(b"key", b"second").await.expect("produce 2");
         b2.commit().await.expect("commit b1");
     }
@@ -959,7 +959,7 @@ async fn can_batch_produce_pipelined() {
 
     let mut client = connect(&pg_config).await.expect("connect");
 
-    let batch = batch(&mut client).await.expect("batch");
+    let batch = Batch::begin(&mut client).await.expect("batch");
 
     let nitems: usize = 1024;
     let items = (0..nitems).map(|i| i.to_string()).collect::<Vec<_>>();
@@ -1004,8 +1004,8 @@ async fn can_batch_produce_with_transaction_then_insert_order() {
     let mut client1 = connect(&pg_config).await.expect("connect");
     let mut client2 = connect(&pg_config).await.expect("connect");
 
-    let batch1 = batch(&mut client1).await.expect("batch");
-    let batch2 = batch(&mut client2).await.expect("batch");
+    let batch1 = Batch::begin(&mut client1).await.expect("batch");
+    let batch2 = Batch::begin(&mut client2).await.expect("batch");
 
     batch1.produce(b"a", b"a-1").await.expect("produce");
     batch2.produce(b"b", b"b-1").await.expect("produce");
@@ -1069,7 +1069,7 @@ async fn can_recover_from_restore_without_without_resetting_epoch() {
     let default_pos = consumers["default"];
 
     info!("Append new entries");
-    let batch = batch(&mut client).await.expect("batch start");
+    let batch = Batch::begin(&mut client).await.expect("batch start");
     let ver = batch.produce(b"_", b"second").await.expect("produce");
     batch.commit().await.expect("commit");
     debug!("appended: {:?}", ver);
@@ -1132,7 +1132,7 @@ async fn can_recover_from_transaction_id_reset_with_only_consumers() {
     let default_pos = consumers["default"];
 
     info!("Append new entries");
-    let batch = batch(&mut client).await.expect("batch start");
+    let batch = Batch::begin(&mut client).await.expect("batch start");
     let ver = batch.produce(b"_", b"second").await.expect("produce");
     batch.commit().await.expect("commit");
     debug!("appended: {:?}", ver);
@@ -1212,7 +1212,7 @@ async fn can_recover_from_transaction_id_reset_with_entries() {
     tx.commit().await.expect("COMMIT");
 
     info!("Append new entries");
-    let batch = batch(&mut client).await.expect("batch start");
+    let batch = Batch::begin(&mut client).await.expect("batch start");
     let ver = batch.produce(b"_", b"second").await.expect("produce");
     batch.commit().await.expect("commit");
     debug!("appended: {:?}", ver);

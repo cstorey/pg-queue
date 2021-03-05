@@ -9,7 +9,7 @@ pub type Version = logs::Version;
 
 #[deprecated]
 pub async fn batch(client: &mut Client) -> logs::Result<logs::Batch<'_>> {
-    logs::batch(client).await
+    logs::Batch::begin(client).await
 }
 #[deprecated]
 pub async fn produce(client: &mut Client, key: &[u8], body: &[u8]) -> logs::Result<logs::Version> {

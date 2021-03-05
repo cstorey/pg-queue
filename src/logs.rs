@@ -113,7 +113,7 @@ pub struct Batch<'a> {
 }
 
 pub async fn produce(client: &mut Client, key: &[u8], body: &[u8]) -> Result<Version> {
-    let batch = batch(client).await?;
+    let batch = Batch::begin(client).await?;
     let version = batch.produce(key, body).await?;
     batch.commit().await?;
     Ok(version)
@@ -125,21 +125,10 @@ pub async fn produce_meta(
     meta: Option<&[u8]>,
     body: &[u8],
 ) -> Result<Version> {
-    let batch = batch(client).await?;
+    let batch = Batch::begin(client).await?;
     let version = batch.produce_meta(key, meta, body).await?;
     batch.commit().await?;
     Ok(version)
-}
-
-pub async fn batch(client: &mut Client) -> Result<Batch<'_>> {
-    let t = client.transaction().await?;
-    let epoch = current_epoch(&t).await?;
-    let insert = t.prepare(INSERT_ROW_SQL).await?;
-    Ok(Batch {
-        transaction: t,
-        insert,
-        epoch,
-    })
 }
 
 async fn current_epoch(t: &Transaction<'_>) -> Result<i64> {
@@ -177,9 +166,22 @@ async fn current_epoch(t: &Transaction<'_>) -> Result<i64> {
 }
 
 impl<'a> Batch<'a> {
+    pub async fn begin(client: &mut Client) -> Result<Batch<'_>> {
+        let t = client.transaction().await?;
+        let epoch = current_epoch(&t).await?;
+        let insert = t.prepare(INSERT_ROW_SQL).await?;
+        let batch = Batch {
+            transaction: t,
+            insert,
+            epoch,
+        };
+        Ok(batch)
+    }
+
     pub async fn produce(&self, key: &[u8], body: &[u8]) -> Result<Version> {
         self.produce_meta(key, None, body).await
     }
+
     pub async fn produce_meta(
         &self,
         key: &[u8],
