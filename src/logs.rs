@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     fmt,
     sync::Arc,
-    time, unimplemented,
+    time,
 };
 
 use chrono::{DateTime, Utc};
@@ -486,8 +486,11 @@ impl Consumer {
 }
 
 impl fmt::Debug for Consumer {
-    fn fmt(&self, _fmt: &mut fmt::Formatter) -> fmt::Result {
-        unimplemented!()
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt.debug_struct("Consumer")
+            .field("name", &self.name)
+            .field("last_seen_offset", &self.last_seen_offset)
+            .finish()
     }
 }
 
