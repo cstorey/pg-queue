@@ -6,6 +6,7 @@ use futures::{
     stream::{self, StreamExt, TryStreamExt},
     FutureExt,
 };
+use pg_queue::{Consumer, Version, batch, produce, produce_meta, setup};
 use tokio_postgres::{self, binary_copy::BinaryCopyInWriter, types::Type, Client, Config, NoTls};
 
 use anyhow::{Context, Result};
@@ -51,7 +52,7 @@ async fn setup_db(schema: &str) {
         .expect("execute");
     t.commit().await.expect("commit");
 
-    pg_queue::setup(&client).await.expect("setup");
+    setup(&client).await.expect("setup");
 }
 
 #[tokio::test]
@@ -62,7 +63,7 @@ async fn can_produce_none() {
     setup_db(schema).await;
 
     debug!("setup consumer");
-    let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "default")
+    let mut cons = Consumer::connect(&pg_config, NoTls, "default")
         .await
         .expect("Consumer");
     debug!("built consumer");
@@ -76,13 +77,13 @@ async fn can_produce_one() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
-    let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "default")
+    let mut cons = Consumer::connect(&pg_config, NoTls, "default")
         .await
         .expect("consumer");
 
     let mut client = connect(&pg_config).await.expect("connect");
 
-    let v = pg_queue::produce(&mut client, b"foo", b"42")
+    let v = produce(&mut client, b"foo", b"42")
         .await
         .expect("produce");
 
@@ -113,13 +114,13 @@ async fn can_produce_with_metadata() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
-    let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "default")
+    let mut cons = Consumer::connect(&pg_config, NoTls, "default")
         .await
         .expect("consumer");
 
     let mut client = connect(&pg_config).await.expect("connect");
 
-    let v = pg_queue::produce_meta(&mut client, b"foo", Some(b"42-meta".as_ref()), b"42")
+    let v = produce_meta(&mut client, b"foo", Some(b"42-meta".as_ref()), b"42")
         .await
         .expect("produce");
 
@@ -150,19 +151,19 @@ async fn can_produce_several() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
-    let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "default")
+    let mut cons = Consumer::connect(&pg_config, NoTls, "default")
         .await
         .expect("consumer");
 
     let mut client = connect(&pg_config).await.expect("connect");
 
-    pg_queue::produce(&mut client, b"a", b"0")
+    produce(&mut client, b"a", b"0")
         .await
         .expect("produce");
-    pg_queue::produce(&mut client, b"b", b"1")
+    produce(&mut client, b"b", b"1")
         .await
         .expect("produce");
-    let v = pg_queue::produce(&mut client, b"c", b"2")
+    let v = produce(&mut client, b"c", b"2")
         .await
         .expect("produce");
 
@@ -193,13 +194,13 @@ async fn can_produce_ordered() {
 
     let mut client = connect(&pg_config).await.expect("connect");
 
-    let v0 = pg_queue::produce(&mut client, b"a", b"0")
+    let v0 = produce(&mut client, b"a", b"0")
         .await
         .expect("produce");
-    let v1 = pg_queue::produce(&mut client, b"a", b"1")
+    let v1 = produce(&mut client, b"a", b"1")
         .await
         .expect("produce");
-    let v2 = pg_queue::produce(&mut client, b"a", b"2")
+    let v2 = produce(&mut client, b"a", b"2")
         .await
         .expect("produce");
 
@@ -214,14 +215,14 @@ async fn can_produce_in_batches() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
-    let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "default")
+    let mut cons = Consumer::connect(&pg_config, NoTls, "default")
         .await
         .expect("consumer");
 
     let mut client = connect(&pg_config).await.expect("connect");
 
     let v = {
-        let batch = pg_queue::batch(&mut client).await.expect("batch");
+        let batch = batch(&mut client).await.expect("batch");
         batch.produce(b"a", b"0").await.expect("produce");
         batch.produce(b"a", b"1").await.expect("produce");
         let v = batch.produce(b"a", b"2").await.expect("produce");
@@ -254,14 +255,14 @@ async fn can_produce_in_batches_with_metadata() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
-    let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "default")
+    let mut cons = Consumer::connect(&pg_config, NoTls, "default")
         .await
         .expect("consumer");
 
     let mut client = connect(&pg_config).await.expect("connect");
 
     let v = {
-        let batch = pg_queue::batch(&mut client).await.expect("batch");
+        let batch = batch(&mut client).await.expect("batch");
         let v = batch
             .produce_meta(b"a", Some(b"one-meta".as_ref()), b"one")
             .await
@@ -285,14 +286,14 @@ async fn can_rollback_batches() {
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
-    let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "default")
+    let mut cons = Consumer::connect(&pg_config, NoTls, "default")
         .await
         .expect("consumer");
 
     let mut client = connect(&pg_config).await.expect("connect");
 
     let v = {
-        let batch = pg_queue::batch(&mut client).await.expect("batch");
+        let batch = batch(&mut client).await.expect("batch");
         batch.produce(b"a", b"0").await.expect("produce");
         batch.produce(b"a", b"1").await.expect("produce");
         let v = batch.produce(b"key", b"2").await.expect("produce");
@@ -315,17 +316,17 @@ async fn can_produce_incrementally() {
 
     let mut client = connect(&pg_config).await.expect("connect");
 
-    pg_queue::produce(&mut client, b"a", b"0")
+    produce(&mut client, b"a", b"0")
         .await
         .expect("produce");
-    pg_queue::produce(&mut client, b"a", b"1")
+    produce(&mut client, b"a", b"1")
         .await
         .expect("produce");
-    let v = pg_queue::produce(&mut client, b"a", b"2")
+    let v = produce(&mut client, b"a", b"2")
         .await
         .expect("produce");
 
-    let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "default")
+    let mut cons = Consumer::connect(&pg_config, NoTls, "default")
         .await
         .expect("consumer");
     cons.wait_until_visible(v, time::Duration::from_secs(1))
@@ -349,19 +350,19 @@ async fn can_consume_incrementally() {
 
     let mut client = connect(&pg_config).await.expect("connect");
 
-    pg_queue::produce(&mut client, b"key", b"0")
+    produce(&mut client, b"key", b"0")
         .await
         .expect("produce");
-    pg_queue::produce(&mut client, b"key", b"1")
+    produce(&mut client, b"key", b"1")
         .await
         .expect("produce");
-    pg_queue::produce(&mut client, b"key", b"2")
+    produce(&mut client, b"key", b"2")
         .await
         .expect("produce");
-    pg_queue::produce(&mut client, b"key", b"3")
+    produce(&mut client, b"key", b"3")
         .await
         .expect("produce");
-    let v = pg_queue::produce(&mut client, b"key", b"4")
+    let v = produce(&mut client, b"key", b"4")
         .await
         .expect("produce");
 
@@ -370,7 +371,7 @@ async fn can_consume_incrementally() {
     for i in 0..expected.len() {
         debug!("Creating consumer iteration {}", i);
         let mut cons = {
-            pg_queue::Consumer::connect(&pg_config, NoTls, "default")
+            Consumer::connect(&pg_config, NoTls, "default")
                 .await
                 .expect("consumer")
         };
@@ -396,18 +397,18 @@ async fn can_restart_consume_at_commit_point() {
     setup_db(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
-    pg_queue::produce(&mut client, b"key", b"0")
+    produce(&mut client, b"key", b"0")
         .await
         .expect("produce");
-    pg_queue::produce(&mut client, b"key", b"1")
+    produce(&mut client, b"key", b"1")
         .await
         .expect("produce");
-    let v = pg_queue::produce(&mut client, b"key", b"2")
+    let v = produce(&mut client, b"key", b"2")
         .await
         .expect("produce");
 
     {
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "default")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "default")
             .await
             .expect("consumer");
         cons.wait_until_visible(v, time::Duration::from_secs(1))
@@ -421,14 +422,14 @@ async fn can_restart_consume_at_commit_point() {
     }
 
     {
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "default")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "default")
             .await
             .expect("consumer");
         let entry = cons.poll().await.expect("poll");
         assert_eq!(entry.map(|e| e.data), Some(b"1".to_vec()));
     }
     {
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "default")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "default")
             .await
             .expect("consumer");
         let entry = cons.poll().await.expect("poll");
@@ -445,18 +446,18 @@ async fn can_progress_without_commit() {
 
     let mut client = connect(&pg_config).await.expect("connect");
 
-    pg_queue::produce(&mut client, b"key", b"0")
+    produce(&mut client, b"key", b"0")
         .await
         .expect("produce");
-    pg_queue::produce(&mut client, b"key", b"1")
+    produce(&mut client, b"key", b"1")
         .await
         .expect("produce");
-    let v = pg_queue::produce(&mut client, b"key", b"2")
+    let v = produce(&mut client, b"key", b"2")
         .await
         .expect("produce");
 
     {
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "default")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "default")
             .await
             .expect("consumer");
         cons.wait_until_visible(v, time::Duration::from_secs(1))
@@ -478,15 +479,15 @@ async fn can_consume_multiply() {
 
     let mut client = connect(&pg_config).await.expect("connect");
 
-    pg_queue::produce(&mut client, b"key", b"0")
+    produce(&mut client, b"key", b"0")
         .await
         .expect("produce");
-    let v = pg_queue::produce(&mut client, b"key", b"1")
+    let v = produce(&mut client, b"key", b"1")
         .await
         .expect("produce");
 
     {
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "one")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "one")
             .await
             .expect("consumer");
         cons.wait_until_visible(v, time::Duration::from_secs(1))
@@ -499,14 +500,14 @@ async fn can_consume_multiply() {
         assert_eq!(entry.map(|e| e.data), Some(b"0".to_vec()));
     }
     {
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "one")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "one")
             .await
             .expect("consumer");
         let entry = cons.poll().await.expect("poll");
         assert_eq!(entry.map(|e| e.data), Some(b"1".to_vec()));
     }
     {
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "two")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "two")
             .await
             .expect("consumer");
         let entry = cons.poll().await.expect("poll");
@@ -516,7 +517,7 @@ async fn can_consume_multiply() {
         assert_eq!(entry.map(|e| e.data), Some(b"0".to_vec()));
     }
     {
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "two")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "two")
             .await
             .expect("consumer");
         let entry = cons.poll().await.expect("poll");
@@ -533,20 +534,20 @@ async fn producing_concurrently_should_never_leave_holes() {
 
     let mut client1 = connect(&pg_config).await.expect("connect");
 
-    let b1 = pg_queue::batch(&mut client1).await.expect("batch b1");
+    let b1 = batch(&mut client1).await.expect("batch b1");
     let v = b1.produce(b"key", b"first").await.expect("produce 1");
 
     {
         let mut client2 = connect(&pg_config).await.expect("connect");
 
-        let b2 = pg_queue::batch(&mut client2).await.expect("batch b2");
+        let b2 = batch(&mut client2).await.expect("batch b2");
         b2.produce(b"key", b"second").await.expect("produce 2");
         b2.commit().await.expect("commit b1");
     }
 
     let observations_a = {
         let mut observations = Vec::new();
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "a")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "a")
             .await
             .expect("consumer");
         while let Some(entry) = cons.poll().await.expect("poll") {
@@ -559,7 +560,7 @@ async fn producing_concurrently_should_never_leave_holes() {
 
     let observations_b = {
         let mut observations = Vec::new();
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "b")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "b")
             .await
             .expect("consumer");
         cons.wait_until_visible(v, time::Duration::from_secs(1))
@@ -596,16 +597,16 @@ async fn can_list_zero_consumer_offsets() {
 
     let mut client = connect(&pg_config).await.expect("connect");
 
-    pg_queue::produce(&mut client, b"key", b"0")
+    produce(&mut client, b"key", b"0")
         .await
         .expect("produce");
-    pg_queue::produce(&mut client, b"key", b"1")
+    produce(&mut client, b"key", b"1")
         .await
         .expect("produce");
 
     let mut client = connect(&pg_config).await.expect("connect");
 
-    let offsets = pg_queue::Consumer::consumers(&mut client)
+    let offsets = Consumer::consumers(&mut client)
         .await
         .expect("iter");
     assert!(offsets.is_empty());
@@ -619,16 +620,16 @@ async fn can_list_consumer_offset() {
     setup_db(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
-    pg_queue::produce(&mut client, b"key", b"0")
+    produce(&mut client, b"key", b"0")
         .await
         .expect("produce");
-    let v = pg_queue::produce(&mut client, b"key", b"1")
+    let v = produce(&mut client, b"key", b"1")
         .await
         .expect("produce");
 
     let entry;
     {
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "one")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "one")
             .await
             .expect("consumer");
         cons.wait_until_visible(v, time::Duration::from_secs(1))
@@ -639,7 +640,7 @@ async fn can_list_consumer_offset() {
     }
 
     let mut client = connect(&pg_config).await.expect("connect");
-    let offsets = pg_queue::Consumer::consumers(&mut client)
+    let offsets = Consumer::consumers(&mut client)
         .await
         .expect("iter");
     assert_eq!(offsets.len(), 1);
@@ -654,15 +655,15 @@ async fn can_list_consumer_offsets() {
     setup_db(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
-    pg_queue::produce(&mut client, b"key", b"0")
+    produce(&mut client, b"key", b"0")
         .await
         .expect("produce");
-    let v = pg_queue::produce(&mut client, b"key", b"1")
+    let v = produce(&mut client, b"key", b"1")
         .await
         .expect("produce");
 
     let one = {
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "one")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "one")
             .await
             .expect("consumer");
         cons.wait_until_visible(v, time::Duration::from_secs(1))
@@ -674,7 +675,7 @@ async fn can_list_consumer_offsets() {
     };
 
     let two = {
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "two")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "two")
             .await
             .expect("consumer");
         let _ = cons.poll().await.expect("poll").expect("some entry");
@@ -688,7 +689,7 @@ async fn can_list_consumer_offsets() {
     expected.insert("two".to_string(), two.version);
 
     let mut client = connect(&pg_config).await.expect("connect");
-    let offsets = pg_queue::Consumer::consumers(&mut client)
+    let offsets = Consumer::consumers(&mut client)
         .await
         .expect("consumers");
     assert_eq!(offsets, expected);
@@ -702,15 +703,15 @@ async fn can_discard_entries() {
     setup_db(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
-    pg_queue::produce(&mut client, b"key", b"0")
+    produce(&mut client, b"key", b"0")
         .await
         .expect("produce");
-    let v = pg_queue::produce(&mut client, b"key", b"1")
+    let v = produce(&mut client, b"key", b"1")
         .await
         .expect("produce");
 
     {
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "one")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "one")
             .await
             .expect("consumer");
         cons.wait_until_visible(v, time::Duration::from_secs(1))
@@ -722,17 +723,17 @@ async fn can_discard_entries() {
 
     {
         let mut client = connect(&pg_config).await.expect("connect");
-        let one_off = pg_queue::Consumer::consumers(&mut client)
+        let one_off = Consumer::consumers(&mut client)
             .await
             .expect("consumers")["one"];
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "cleaner")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "cleaner")
             .await
             .expect("consumer");
         cons.discard_upto(one_off).await.expect("discard");
     }
 
     {
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "two")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "two")
             .await
             .expect("consumer");
         let entry = cons.poll().await.expect("poll").expect("some entry");
@@ -746,10 +747,10 @@ async fn can_discard_on_empty() {
     let schema = "can_discard_on_empty";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
-    let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "cleaner")
+    let mut cons = Consumer::connect(&pg_config, NoTls, "cleaner")
         .await
         .expect("consumer");
-    cons.discard_upto(pg_queue::Version::default())
+    cons.discard_upto(Version::default())
         .await
         .expect("discard");
 }
@@ -762,15 +763,15 @@ async fn can_discard_consumed() {
     setup_db(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
-    pg_queue::produce(&mut client, b"key", b"0")
+    produce(&mut client, b"key", b"0")
         .await
         .expect("produce");
-    let v = pg_queue::produce(&mut client, b"key", b"1")
+    let v = produce(&mut client, b"key", b"1")
         .await
         .expect("produce");
 
     {
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "one")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "one")
             .await
             .expect("consumer");
         cons.wait_until_visible(v, time::Duration::from_secs(1))
@@ -782,14 +783,14 @@ async fn can_discard_consumed() {
     }
 
     {
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "cleaner")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "cleaner")
             .await
             .expect("consumer");
         cons.discard_consumed().await.expect("discard");
     }
 
     {
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "two")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "two")
             .await
             .expect("consumer");
         let entry = cons.poll().await.expect("poll").expect("some entry");
@@ -803,7 +804,7 @@ async fn can_discard_consumed_on_empty() {
     let schema = "can_discard_consumed_on_empty";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
-    let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "cleaner")
+    let mut cons = Consumer::connect(&pg_config, NoTls, "cleaner")
         .await
         .expect("consumer");
     cons.discard_consumed().await.expect("discard");
@@ -817,16 +818,16 @@ async fn can_discard_after_written() {
     setup_db(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
-    let v = pg_queue::produce(&mut client, b"key", b"0")
+    let v = produce(&mut client, b"key", b"0")
         .await
         .expect("produce");
-    let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "cleaner")
+    let mut cons = Consumer::connect(&pg_config, NoTls, "cleaner")
         .await
         .expect("consumer");
     cons.wait_until_visible(v, time::Duration::from_secs(1))
         .await
         .expect("wait for version");
-    cons.discard_upto(pg_queue::Version::default())
+    cons.discard_upto(Version::default())
         .await
         .expect("discard");
 }
@@ -839,18 +840,18 @@ async fn can_discard_consumed_without_losing_entries() {
     setup_db(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
-    let _ = pg_queue::produce(&mut client, b"key", b"0")
+    let _ = produce(&mut client, b"key", b"0")
         .await
         .expect("produce");
-    let v1 = pg_queue::produce(&mut client, b"key", b"1")
+    let v1 = produce(&mut client, b"key", b"1")
         .await
         .expect("produce");
-    let v2 = pg_queue::produce(&mut client, b"key", b"2")
+    let v2 = produce(&mut client, b"key", b"2")
         .await
         .expect("produce");
 
     {
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "one")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "one")
             .await
             .expect("consumer");
         cons.wait_until_visible(v1, time::Duration::from_secs(1))
@@ -863,7 +864,7 @@ async fn can_discard_consumed_without_losing_entries() {
     }
 
     {
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "two")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "two")
             .await
             .expect("consumer");
 
@@ -879,7 +880,7 @@ async fn can_discard_consumed_without_losing_entries() {
     }
 
     {
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "cleaner")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "cleaner")
             .await
             .expect("consumer");
 
@@ -887,7 +888,7 @@ async fn can_discard_consumed_without_losing_entries() {
     }
 
     {
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "one")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "one")
             .await
             .expect("consumer");
         let entry = cons.poll().await.expect("poll").expect("some entry");
@@ -903,18 +904,18 @@ async fn can_remove_consumer_offset() {
     setup_db(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
-    pg_queue::produce(&mut client, b"key", b"0")
+    produce(&mut client, b"key", b"0")
         .await
         .expect("produce");
-    pg_queue::produce(&mut client, b"key", b"1")
+    produce(&mut client, b"key", b"1")
         .await
         .expect("produce");
-    let v = pg_queue::produce(&mut client, b"key", b"2")
+    let v = produce(&mut client, b"key", b"2")
         .await
         .expect("produce");
 
     {
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "default")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "default")
             .await
             .expect("consumer");
         cons.wait_until_visible(v, time::Duration::from_secs(1))
@@ -927,14 +928,14 @@ async fn can_remove_consumer_offset() {
     }
 
     {
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "default")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "default")
             .await
             .expect("consumer");
         let _ = cons.clear_offset().await.expect("clear_offset");
     }
     {
         let mut client = connect(&pg_config).await.expect("connect");
-        let consumers = pg_queue::Consumer::consumers(&mut client)
+        let consumers = Consumer::consumers(&mut client)
             .await
             .expect("consumers");
         assert_eq!(consumers.get("default"), None);
@@ -949,18 +950,18 @@ async fn removing_non_consumer_is_noop() {
     setup_db(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
-    pg_queue::produce(&mut client, b"key", b"0")
+    produce(&mut client, b"key", b"0")
         .await
         .expect("produce");
-    pg_queue::produce(&mut client, b"key", b"1")
+    produce(&mut client, b"key", b"1")
         .await
         .expect("produce");
-    let v = pg_queue::produce(&mut client, b"key", b"2")
+    let v = produce(&mut client, b"key", b"2")
         .await
         .expect("produce");
 
     {
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "default")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "default")
             .await
             .expect("consumer");
         cons.wait_until_visible(v, time::Duration::from_secs(1))
@@ -970,14 +971,14 @@ async fn removing_non_consumer_is_noop() {
     }
 
     {
-        let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "default")
+        let mut cons = Consumer::connect(&pg_config, NoTls, "default")
             .await
             .expect("consumer");
         cons.clear_offset().await.expect("clear_offset");
     }
     {
         let mut client = connect(&pg_config).await.expect("connect");
-        let consumers = pg_queue::Consumer::consumers(&mut client)
+        let consumers = Consumer::consumers(&mut client)
             .await
             .expect("consumers");
         assert_eq!(consumers.get("default"), None);
@@ -990,7 +991,7 @@ async fn can_produce_consume_with_wait() {
     let schema = "can_produce_consume_with_wait";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
-    let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "default")
+    let mut cons = Consumer::connect(&pg_config, NoTls, "default")
         .await
         .expect("consumer");
 
@@ -1002,7 +1003,7 @@ async fn can_produce_consume_with_wait() {
     thread::sleep(time::Duration::from_millis(5));
     debug!("Producing");
     let mut client = connect(&pg_config).await.expect("connect");
-    pg_queue::produce(&mut client, b"key", b"42")
+    produce(&mut client, b"key", b"42")
         .await
         .expect("produce");
 
@@ -1022,12 +1023,12 @@ async fn can_read_timestamp() {
     let schema = "can_read_timestamp";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
-    let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "default")
+    let mut cons = Consumer::connect(&pg_config, NoTls, "default")
         .await
         .expect("consumer");
 
     let mut client = connect(&pg_config).await.expect("connect");
-    let v = pg_queue::produce(&mut client, b"foo", b"42")
+    let v = produce(&mut client, b"foo", b"42")
         .await
         .expect("produce");
 
@@ -1058,13 +1059,13 @@ async fn can_batch_produce_pipelined() {
     let schema = "can_batch_produce_pipelined";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
-    let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "default")
+    let mut cons = Consumer::connect(&pg_config, NoTls, "default")
         .await
         .expect("consumer");
 
     let mut client = connect(&pg_config).await.expect("connect");
 
-    let batch = pg_queue::batch(&mut client).await.expect("batch");
+    let batch = batch(&mut client).await.expect("batch");
 
     let nitems: usize = 1024;
     let items = (0..nitems).map(|i| i.to_string()).collect::<Vec<_>>();
@@ -1109,8 +1110,8 @@ async fn can_batch_produce_with_transaction_then_insert_order() {
     let mut client1 = connect(&pg_config).await.expect("connect");
     let mut client2 = connect(&pg_config).await.expect("connect");
 
-    let batch1 = pg_queue::batch(&mut client1).await.expect("batch");
-    let batch2 = pg_queue::batch(&mut client2).await.expect("batch");
+    let batch1 = batch(&mut client1).await.expect("batch");
+    let batch2 = batch(&mut client2).await.expect("batch");
 
     batch1.produce(b"a", b"a-1").await.expect("produce");
     batch2.produce(b"b", b"b-1").await.expect("produce");
@@ -1121,7 +1122,7 @@ async fn can_batch_produce_with_transaction_then_insert_order() {
     batch2.commit().await.expect("commit");
 
     println!("Versions: {:?} / {:?}", v1, v2);
-    let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "default")
+    let mut cons = Consumer::connect(&pg_config, NoTls, "default")
         .await
         .expect("consumer");
 
@@ -1169,14 +1170,14 @@ async fn can_recover_from_restore_without_without_resetting_epoch() {
     writer.finish().await.expect("expect finish");
     tx.commit().await.expect("COMMIT");
 
-    let consumers = pg_queue::Consumer::consumers(&mut client)
+    let consumers = Consumer::consumers(&mut client)
         .await
         .expect("consumers");
     info!("Consumer positions: {:?}", consumers);
     let default_pos = consumers["default"];
 
     info!("Append new entries");
-    let batch = pg_queue::batch(&mut client).await.expect("batch start");
+    let batch = batch(&mut client).await.expect("batch start");
     let ver = batch.produce(b"_", b"second").await.expect("produce");
     batch.commit().await.expect("commit");
     debug!("appended: {:?}", ver);
@@ -1234,14 +1235,14 @@ async fn can_recover_from_transaction_id_reset_with_only_consumers() {
     writer.finish().await.expect("expect finish");
     tx.commit().await.expect("COMMIT");
 
-    let consumers = pg_queue::Consumer::consumers(&mut client)
+    let consumers = Consumer::consumers(&mut client)
         .await
         .expect("consumers");
     info!("Consumer positions: {:?}", consumers);
     let default_pos = consumers["default"];
 
     info!("Append new entries");
-    let batch = pg_queue::batch(&mut client).await.expect("batch start");
+    let batch = batch(&mut client).await.expect("batch start");
     let ver = batch.produce(b"_", b"second").await.expect("produce");
     batch.commit().await.expect("commit");
     debug!("appended: {:?}", ver);
@@ -1321,7 +1322,7 @@ async fn can_recover_from_transaction_id_reset_with_entries() {
     tx.commit().await.expect("COMMIT");
 
     info!("Append new entries");
-    let batch = pg_queue::batch(&mut client).await.expect("batch start");
+    let batch = batch(&mut client).await.expect("batch start");
     let ver = batch.produce(b"_", b"second").await.expect("produce");
     batch.commit().await.expect("commit");
     debug!("appended: {:?}", ver);
@@ -1341,7 +1342,7 @@ async fn can_recover_from_transaction_id_reset_with_entries() {
 
     info!("Reconnect");
 
-    let mut cons = pg_queue::Consumer::connect(&pg_config, NoTls, "default")
+    let mut cons = Consumer::connect(&pg_config, NoTls, "default")
         .await
         .expect("consumer");
 
