@@ -6,9 +6,10 @@ use futures::{
     stream::{self, StreamExt, TryStreamExt},
     FutureExt,
 };
-use pg_queue::logs::{batch, produce, produce_meta, setup, Consumer, Version};
 use log::{debug, info};
 use tokio_postgres::{self, binary_copy::BinaryCopyInWriter, types::Type, Client, Config, NoTls};
+
+use pg_queue::logs::{batch, produce, produce_meta, setup, Consumer, Version};
 
 const DEFAULT_URL: &str = "postgres://postgres@localhost/";
 
