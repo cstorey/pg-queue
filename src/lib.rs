@@ -1,10 +1,8 @@
 use std::{fmt, sync::Arc, unimplemented};
 
-#[macro_use]
-extern crate log;
-
 use chrono::{DateTime, Utc};
 use futures_util::stream::StreamExt;
+use log::{debug, info, trace, warn};
 use std::collections::{BTreeMap, VecDeque};
 use std::time;
 use thiserror::Error;
