@@ -6,7 +6,7 @@ use futures::{
     stream::{self, StreamExt, TryStreamExt},
     FutureExt,
 };
-use pg_queue::{batch, produce, produce_meta, setup, Consumer, Version};
+use pg_queue::logs::{batch, produce, produce_meta, setup, Consumer, Version};
 use tokio_postgres::{self, binary_copy::BinaryCopyInWriter, types::Type, Client, Config, NoTls};
 
 use anyhow::{Context, Result};
