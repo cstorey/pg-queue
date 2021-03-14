@@ -14,7 +14,6 @@ static SAMPLE_HEAD: &str = "\
     LIMIT 1";
 static CONSUMER_EPOCHS: &str =
     "SELECT epoch, tx_position as tx_id, txid_current() as current_tx_id FROM log_consumer_positions ORDER BY epoch DESC LIMIT 1";
-
 static CREATE_TABLE_SQL: &str = include_str!("schema.sql");
 
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]

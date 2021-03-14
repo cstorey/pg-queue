@@ -111,54 +111,7 @@ impl Consumer {
         version: Version,
         timeout: time::Duration,
     ) -> Result<()> {
-        let deadline = time::Instant::now() + timeout;
-        self.client.execute(LISTEN, &[]).await?;
-        for backoff in 0..64 {
-            trace!("Checking for visibility of: {:?}", version,);
-            let (is_visible, txmin, tx_current) = self
-                .client
-                .query(IS_VISIBLE, &[&version.tx_id])
-                .await?
-                .into_iter()
-                .next()
-                .map(|r| {
-                    (
-                        r.get::<_, bool>("lt_xmin"),
-                        r.get::<_, i64>("xmin"),
-                        r.get::<_, i64>("current"),
-                    )
-                })
-                .ok_or(Error::NoRowsFromVisibilityCheck)?;
-            trace!(
-                "Visibility check: is_visible:{:?}; xmin:{:?}; current: {:?}",
-                is_visible,
-                txmin,
-                tx_current
-            );
-
-            let now = time::Instant::now();
-
-            if is_visible {
-                break;
-            }
-
-            if now > deadline {
-                return Err(Error::VisibilityTimeout(version));
-            }
-
-            let remaining = deadline - now;
-            let backoff = Duration::from_millis((2u64).pow(backoff));
-            let pause = std::cmp::min(remaining, backoff);
-            trace!(
-                "remaining: {:?}; backoff: {:?}; Pause for: {:?}",
-                remaining,
-                backoff,
-                pause
-            );
-            sleep(pause).await;
-        }
-
-        Ok(())
+        wait_until_visible(&self.client, version, timeout).await
     }
 
     pub async fn commit_upto(&mut self, entry: &Entry) -> Result<()> {
@@ -200,6 +153,60 @@ impl Consumer {
     pub async fn clear_offset(&mut self) -> Result<()> {
         self.cursor.clear_offset(&mut self.client).await
     }
+}
+
+pub async fn wait_until_visible(
+    client: &Client,
+    version: Version,
+    timeout: time::Duration,
+) -> Result<()> {
+    let deadline = time::Instant::now() + timeout;
+    client.execute(LISTEN, &[]).await?;
+    for backoff in 0..64 {
+        trace!("Checking for visibility of: {:?}", version,);
+        let (is_visible, txmin, tx_current) = client
+            .query(IS_VISIBLE, &[&version.tx_id])
+            .await?
+            .into_iter()
+            .next()
+            .map(|r| {
+                (
+                    r.get::<_, bool>("lt_xmin"),
+                    r.get::<_, i64>("xmin"),
+                    r.get::<_, i64>("current"),
+                )
+            })
+            .ok_or(Error::NoRowsFromVisibilityCheck)?;
+        trace!(
+            "Visibility check: is_visible:{:?}; xmin:{:?}; current: {:?}",
+            is_visible,
+            txmin,
+            tx_current
+        );
+
+        let now = time::Instant::now();
+
+        if is_visible {
+            break;
+        }
+
+        if now > deadline {
+            return Err(Error::VisibilityTimeout(version));
+        }
+
+        let remaining = deadline - now;
+        let backoff = Duration::from_millis((2u64).pow(backoff));
+        let pause = std::cmp::min(remaining, backoff);
+        trace!(
+            "remaining: {:?}; backoff: {:?}; Pause for: {:?}",
+            remaining,
+            backoff,
+            pause
+        );
+        sleep(pause).await;
+    }
+
+    Ok(())
 }
 
 impl fmt::Debug for Consumer {
