@@ -18,6 +18,10 @@ use tokio_postgres::{
     self, tls::MakeTlsConnect, AsyncMessage, Client, Config, Connection, Socket, Transaction,
 };
 
+mod producer;
+
+pub use self::producer::*;
+
 const LIMIT_BUFFER: i64 = 1024;
 
 // In our SQL, the "current epoch" is defined as either:
@@ -25,15 +29,12 @@ const LIMIT_BUFFER: i64 = 1024;
 // log_head.epoch if log_head.epoch.tx_id < txid_current()
 // log_head.epoch otherwise
 
-static INSERT_ROW_SQL: &str =
-    "INSERT INTO logs (epoch, key, meta, body) values($1, $2, $3, $4) RETURNING epoch, tx_id as tx_position, id as position";
 static SAMPLE_HEAD: &str = "\
     SELECT epoch, tx_id, txid_current() as current_tx_id
     FROM logs ORDER BY epoch desc, tx_id desc
     LIMIT 1";
 static CONSUMER_EPOCHS: &str =
     "SELECT epoch, tx_position as tx_id, txid_current() as current_tx_id FROM log_consumer_positions ORDER BY epoch DESC LIMIT 1";
-static SEND_NOTIFY_SQL: &str = "SELECT pg_notify('logs', '')";
 
 static FETCH_NEXT_ROW: &str = "\
     SELECT epoch, tx_id as tx_position, id as position, key, meta, body, written_at
@@ -106,31 +107,6 @@ pub async fn setup(conn: &Client) -> Result<()> {
     Ok(())
 }
 
-pub struct Batch<'a> {
-    transaction: tokio_postgres::Transaction<'a>,
-    insert: tokio_postgres::Statement,
-    epoch: i64,
-}
-
-pub async fn produce(client: &mut Client, key: &[u8], body: &[u8]) -> Result<Version> {
-    let batch = Batch::begin(client).await?;
-    let version = batch.produce(key, body).await?;
-    batch.commit().await?;
-    Ok(version)
-}
-
-pub async fn produce_meta(
-    client: &mut Client,
-    key: &[u8],
-    meta: Option<&[u8]>,
-    body: &[u8],
-) -> Result<Version> {
-    let batch = Batch::begin(client).await?;
-    let version = batch.produce_meta(key, meta, body).await?;
-    batch.commit().await?;
-    Ok(version)
-}
-
 async fn current_epoch(t: &Transaction<'_>) -> Result<i64> {
     if let Some(epoch_row) = t.query_opt(SAMPLE_HEAD, &[]).await? {
         let head_epoch: i64 = epoch_row.get("epoch");
@@ -163,69 +139,6 @@ async fn current_epoch(t: &Transaction<'_>) -> Result<i64> {
     };
 
     Ok(1)
-}
-
-impl<'a> Batch<'a> {
-    pub async fn begin(client: &mut Client) -> Result<Batch<'_>> {
-        let t = client.transaction().await?;
-        let epoch = current_epoch(&t).await?;
-        let insert = t.prepare(INSERT_ROW_SQL).await?;
-        let batch = Batch {
-            transaction: t,
-            insert,
-            epoch,
-        };
-        Ok(batch)
-    }
-
-    pub async fn produce(&self, key: &[u8], body: &[u8]) -> Result<Version> {
-        self.produce_meta(key, None, body).await
-    }
-
-    pub async fn produce_meta(
-        &self,
-        key: &[u8],
-        meta: Option<&[u8]>,
-        body: &[u8],
-    ) -> Result<Version> {
-        let rows = self
-            .transaction
-            .query(&self.insert, &[&self.epoch, &key, &meta, &body])
-            .await?;
-        let id = rows
-            .iter()
-            .map(|r| Version::from_row(r))
-            .next()
-            .ok_or(Error::NoRowsFromInsert)?;
-
-        trace!("id: {:?}", id);
-        Ok(id)
-    }
-
-    pub async fn commit(self) -> Result<()> {
-        // It looks like postgres 9x will:
-        // * Take a database scoped exclusive lock when appending notifications to the queue on commit
-        // * Continue holding that lock until the transaction overall commits.
-        // This means that WAL flushes get serialized, we can't take advantage of group commit,
-        // and write throughput tanks.
-        // However, because it's _really_ awkward_ to get a reference to both
-        // a client and it's transaction, we do this inside the transaction
-        // and hope for the best.
-        let Batch { transaction, .. } = self;
-        transaction.query(SEND_NOTIFY_SQL, &[]).await?;
-        trace!("Sent notify");
-        transaction.commit().await?;
-        trace!("Committed");
-
-        Ok(())
-    }
-
-    pub async fn rollback(self) -> Result<()> {
-        let Batch { transaction, .. } = self;
-        transaction.rollback().await?;
-        trace!("Rolled back");
-        Ok(())
-    }
 }
 
 pub struct Consumer {
