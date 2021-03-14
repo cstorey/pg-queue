@@ -3,9 +3,10 @@ use thiserror::Error;
 use tokio_postgres::{self, Client, Transaction};
 
 mod consumer;
+mod cursor;
 mod producer;
 
-pub use self::{consumer::*, producer::*};
+pub use self::{consumer::*, cursor::*, producer::*};
 
 static SAMPLE_HEAD: &str = "\
     SELECT epoch, tx_id, txid_current() as current_tx_id

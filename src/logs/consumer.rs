@@ -1,9 +1,4 @@
-use std::{
-    collections::{BTreeMap, VecDeque},
-    fmt,
-    sync::Arc,
-    time,
-};
+use std::{collections::BTreeMap, fmt, sync::Arc, time};
 
 use chrono::{DateTime, Utc};
 use futures_util::stream::StreamExt;
@@ -15,18 +10,8 @@ use tokio::{
 };
 use tokio_postgres::{self, tls::MakeTlsConnect, AsyncMessage, Client, Config, Connection, Socket};
 
-use crate::logs::{current_epoch, Error, Result, Version};
+use crate::logs::{Cursor, Error, Result, Version};
 
-static FETCH_CONSUMER_POSITION: &str =
-    "SELECT epoch, tx_position, position FROM log_consumer_positions WHERE \
-     name = $1";
-static FETCH_NEXT_ROW: &str = "\
-     SELECT epoch, tx_id as tx_position, id as position, key, meta, body, written_at
-     FROM logs
-     WHERE (epoch, tx_id, id) > ($1, $2, $3)
-     AND (epoch, tx_id) < ($4, txid_snapshot_xmin(txid_current_snapshot()))
-     ORDER BY epoch asc, tx_id asc, id asc
-     LIMIT $5";
 static LISTEN: &str = "LISTEN logs";
 static IS_VISIBLE: &str = "\
      WITH snapshot as (
@@ -34,17 +19,9 @@ static IS_VISIBLE: &str = "\
          txid_current() as current
         )
         SELECT $1 < xmin as lt_xmin, xmin, current FROM snapshot";
-static UPSERT_CONSUMER_OFFSET: &str = "\
-     INSERT INTO log_consumer_positions (name, epoch, tx_position, position) \
-     values ($1, $2, $3, $4) \
-     ON CONFLICT (name) DO \
-     UPDATE SET tx_position = EXCLUDED.tx_position, position = EXCLUDED.position";
 static LIST_CONSUMERS: &str =
     "SELECT name, epoch, tx_position, position FROM log_consumer_positions";
-static DISCARD_CONSUMER: &str = "DELETE FROM log_consumer_positions WHERE name = $1";
 static DISCARD_ENTRIES: &str = "DELETE FROM logs WHERE (tx_id, id) <= ($1, $2)";
-
-const LIMIT_BUFFER: i64 = 1024;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Entry {
@@ -57,10 +34,8 @@ pub struct Entry {
 
 pub struct Consumer {
     client: Client,
-    name: String,
-    last_seen_offset: Version,
-    buf: VecDeque<Entry>,
     notify: Arc<Notify>,
+    cursor: Cursor,
 }
 
 impl Consumer {
@@ -78,34 +53,15 @@ impl Consumer {
     }
 
     async fn new(notify: Arc<Notify>, mut client: Client, name: &str) -> Result<Self> {
-        let position = Self::fetch_consumer_pos(&mut client, name).await?;
-
-        trace!("Loaded position for consumer {:?}: {:?}", name, position);
+        let cursor = Cursor::load(&mut client, name).await?;
 
         let consumer = Consumer {
             client,
             notify,
-            name: name.to_string(),
-            last_seen_offset: position,
-            buf: VecDeque::new(),
+            cursor,
         };
 
         Ok(consumer)
-    }
-
-    async fn fetch_consumer_pos(client: &mut Client, name: &str) -> Result<Version> {
-        let t = client.transaction().await?;
-        let rows = t.query(FETCH_CONSUMER_POSITION, &[&name]).await?;
-        t.commit().await?;
-
-        trace!("next rows:{:?}", rows.len());
-        let position = rows
-            .into_iter()
-            .next()
-            .map(|r| Version::from_row(&r))
-            .unwrap_or_else(Version::default);
-
-        Ok(position)
     }
 
     async fn run_connection<
@@ -136,53 +92,7 @@ impl Consumer {
     }
 
     async fn poll_item(&mut self) -> Result<Option<Entry>> {
-        if let Some(entry) = self.buf.pop_front() {
-            trace!("returning (from buffer): {:?}", entry);
-            self.last_seen_offset = entry.version;
-            return Ok(Some(entry));
-        }
-
-        let t = self.client.transaction().await?;
-        let epoch = current_epoch(&t).await?;
-
-        let rows = t
-            .query(
-                FETCH_NEXT_ROW,
-                &[
-                    &self.last_seen_offset.epoch,
-                    &self.last_seen_offset.tx_id,
-                    &self.last_seen_offset.seq,
-                    &epoch,
-                    &LIMIT_BUFFER,
-                ],
-            )
-            .await?;
-        trace!("next rows:{:?}", rows.len());
-        for r in rows.into_iter() {
-            let version = Version::from_row(&r);
-            let key: Vec<u8> = r.get("key");
-            let meta: Option<Vec<u8>> = r.get("meta");
-            let data: Vec<u8> = r.get("body");
-            let written_at = r.get("written_at");
-            trace!("buffering id: {:?}", version);
-            self.buf.push_back(Entry {
-                version,
-                written_at,
-                meta,
-                key,
-                data,
-            })
-        }
-        t.commit().await?;
-
-        if let Some(res) = self.buf.pop_front() {
-            self.last_seen_offset = res.version;
-            trace!("returning (from db): {:?}", res);
-            Ok(Some(res))
-        } else {
-            trace!("nothing yet");
-            Ok(None)
-        }
+        return self.cursor.poll(&mut self.client).await;
     }
 
     pub async fn wait_next(&mut self) -> Result<Entry> {
@@ -252,24 +162,7 @@ impl Consumer {
     }
 
     pub async fn commit_upto(&mut self, entry: &Entry) -> Result<()> {
-        let t = self.client.transaction().await?;
-        t.execute(
-            UPSERT_CONSUMER_OFFSET,
-            &[
-                &self.name,
-                &entry.version.epoch,
-                &entry.version.tx_id,
-                &entry.version.seq,
-            ],
-        )
-        .await?;
-        t.commit().await?;
-        trace!(
-            "Persisted position for consumer {:?}: {:?}",
-            self.name,
-            entry.version
-        );
-        Ok(())
+        self.cursor.commit_upto(&mut self.client, entry).await
     }
 
     pub async fn discard_upto(&mut self, limit: Version) -> Result<()> {
@@ -305,18 +198,14 @@ impl Consumer {
     }
 
     pub async fn clear_offset(&mut self) -> Result<()> {
-        let t = self.client.transaction().await?;
-        t.execute(DISCARD_CONSUMER, &[&self.name]).await?;
-        t.commit().await?;
-        Ok(())
+        self.cursor.clear_offset(&mut self.client).await
     }
 }
 
 impl fmt::Debug for Consumer {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         fmt.debug_struct("Consumer")
-            .field("name", &self.name)
-            .field("last_seen_offset", &self.last_seen_offset)
+            .field("cursor", &self.cursor)
             .finish()
     }
 }
