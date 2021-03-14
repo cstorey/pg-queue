@@ -7,11 +7,6 @@ mod producer;
 
 pub use self::{consumer::*, producer::*};
 
-// In our SQL, the "current epoch" is defined as either:
-// 1 if is_empty(log)
-// log_head.epoch if log_head.epoch.tx_id < txid_current()
-// log_head.epoch otherwise
-
 static SAMPLE_HEAD: &str = "\
     SELECT epoch, tx_id, txid_current() as current_tx_id
     FROM logs ORDER BY epoch desc, tx_id desc
