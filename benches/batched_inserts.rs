@@ -82,7 +82,7 @@ fn batch_pipeline_insert_n(b: &mut Bencher, nitems: usize) {
 
             stream::iter(bodies.iter())
                 .map(|it| batch.produce(b"test", it.as_bytes()))
-                .buffered(nitems)
+                .buffered(nitems+1)
                 .try_for_each(|v| async move {
                     black_box(v);
                     Ok(())
