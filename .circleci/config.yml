@@ -23,6 +23,9 @@ jobs:
           git config --global user.name "CircleCI build for ${upstream}"
           echo "Merging with: ${MERGE_BASE}"
           git merge --no-edit --no-ff "origin/${MERGE_BASE}"
+    - run: rustup component add rustfmt
+    - run: rustfmt --version
+    - run: cargo fmt -- --check
     - restore_cache:
         name: "Restore registry index"
         key: registry
