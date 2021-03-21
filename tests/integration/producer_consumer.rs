@@ -1,12 +1,11 @@
 use std::{cmp, collections::BTreeMap, thread, time};
 
 use futures::{
-    pin_mut,
     stream::{self, StreamExt, TryStreamExt},
     FutureExt,
 };
 use log::{debug, info};
-use tokio_postgres::{self, binary_copy::BinaryCopyInWriter, types::Type, NoTls};
+use tokio_postgres::{self, NoTls};
 
 use pg_queue::logs::{produce, produce_meta, Batch, Consumer, Version};
 
@@ -1009,20 +1008,12 @@ async fn can_recover_from_restore_without_without_resetting_epoch() {
     // Assume the backup had advanced to an absurdly high transaction ID.
     let backup_tx_id = 1i64;
     let original_epoch = 23i64;
-    let sink = tx
-        .copy_in(
-            "COPY log_consumer_positions (name, epoch, tx_position, position) FROM STDIN BINARY",
-        )
-        .await
-        .expect("copy in logs");
-    let writer = BinaryCopyInWriter::new(sink, &[Type::TEXT, Type::INT8, Type::INT8, Type::INT8]);
-    pin_mut!(writer);
-    writer
-        .as_mut()
-        .write(&[&"default", &original_epoch, &backup_tx_id, &5i64])
-        .await
-        .expect("write row");
-    writer.finish().await.expect("expect finish");
+
+    tx.execute(
+        "INSERT INTO log_consumer_positions (name, epoch, tx_position, position) VALUES ($1, $2, $3, $4)",
+        &[&"default", &original_epoch, &backup_tx_id, &5i64]
+    ).await.expect("insert log");
+
     tx.commit().await.expect("COMMIT");
 
     let consumers = Consumer::consumers(&mut client).await.expect("consumers");
@@ -1072,20 +1063,12 @@ async fn can_recover_from_transaction_id_reset_with_only_consumers() {
     // Assume the backup had advanced to an absurdly high transaction ID.
     let backup_tx_id = 1_000_000_000_000_000_000i64;
     let original_epoch = 23i64;
-    let sink = tx
-        .copy_in(
-            "COPY log_consumer_positions (name, epoch, tx_position, position) FROM STDIN BINARY",
-        )
-        .await
-        .expect("copy in logs");
-    let writer = BinaryCopyInWriter::new(sink, &[Type::TEXT, Type::INT8, Type::INT8, Type::INT8]);
-    pin_mut!(writer);
-    writer
-        .as_mut()
-        .write(&[&"default", &original_epoch, &backup_tx_id, &5i64])
-        .await
-        .expect("write row");
-    writer.finish().await.expect("expect finish");
+
+    tx.execute(
+        "INSERT INTO log_consumer_positions (name, epoch, tx_position, position) VALUES ($1, $2, $3, $4)",
+        &[&"default", &original_epoch, &backup_tx_id, &5i64]
+    ).await.expect("insert log");
+
     tx.commit().await.expect("COMMIT");
 
     let consumers = Consumer::consumers(&mut client).await.expect("consumers");
@@ -1133,42 +1116,23 @@ async fn can_recover_from_transaction_id_reset_with_entries() {
     info!("Restoring from backup");
     // Assume the backup had advanced to an absurdly high transaction ID.
     let backup_tx_id = 1_000_000_000_000_000_000i64;
-    let sink = tx
-        .copy_in("COPY logs (epoch, tx_id, id, key, body) FROM STDIN BINARY")
-        .await
-        .expect("copy in logs");
-    let writer = BinaryCopyInWriter::new(
-        sink,
-        &[Type::INT8, Type::INT8, Type::INT8, Type::BYTEA, Type::BYTEA],
-    );
-    pin_mut!(writer);
-    writer
-        .as_mut()
-        .write(&[
+    tx.execute(
+        "INSERT INTO logs (epoch, tx_id, id, key, body) VALUES ($1, $2, $3, $4, $5)",
+        &[
             &23i64,
             &(backup_tx_id + 1),
             &10i64,
             &(b"_" as &[u8]),
             &(b"first" as &[u8]),
-        ])
-        .await
-        .expect("write row");
-    writer.finish().await.expect("expect finish");
+        ],
+    )
+    .await
+    .expect("insert log");
 
-    let sink = tx
-        .copy_in(
-            "COPY log_consumer_positions (epoch, name, position, tx_position) FROM STDIN BINARY",
-        )
-        .await
-        .expect("copy in logs");
-    let writer = BinaryCopyInWriter::new(sink, &[Type::INT8, Type::TEXT, Type::INT8, Type::INT8]);
-    pin_mut!(writer);
-    writer
-        .as_mut()
-        .write(&[&23i64, &"default", &backup_tx_id, &5i64])
-        .await
-        .expect("write row");
-    writer.finish().await.expect("expect finish");
+    tx.execute(
+        "INSERT INTO log_consumer_positions (epoch, name, position, tx_position) VALUES ($1, $2, $3, $4)",
+        &[&23i64, &"default", &backup_tx_id, &5i64]
+    ).await.expect("insert log");
 
     tx.commit().await.expect("COMMIT");
 
