@@ -8,12 +8,27 @@ mod producer;
 
 pub use self::{consumer::*, cursor::*, producer::*};
 
-static SAMPLE_HEAD: &str = "\
-    SELECT epoch, tx_id, txid_current() as current_tx_id
-    FROM logs ORDER BY epoch desc, tx_id desc
-    LIMIT 1";
-static CONSUMER_EPOCHS: &str =
-    "SELECT epoch, tx_position as tx_id, txid_current() as current_tx_id FROM log_consumer_positions ORDER BY epoch DESC LIMIT 1";
+static CURRENT_EPOCH: &str = "\
+    WITH head as (
+        SELECT epoch, tx_id, txid_current() as current_tx_id
+        FROM logs
+        ORDER BY epoch desc, tx_id desc
+        LIMIT 1
+    ), consumers as (
+        SELECT epoch, tx_position as tx_id, txid_current() as current_tx_id
+        FROM log_consumer_positions
+        ORDER BY epoch desc, tx_id desc
+        LIMIT 1
+    ), combined as (
+        SELECT * FROM head
+        UNION ALL
+        SELECT * FROM consumers
+    )
+    SELECT * FROM combined
+    ORDER BY epoch desc, tx_id desc
+    LIMIT 1
+";
+
 static CREATE_TABLE_SQL: &str = include_str!("schema.sql");
 
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
@@ -49,11 +64,7 @@ pub async fn setup(conn: &Client) -> Result<()> {
 }
 
 async fn current_epoch(t: &Transaction<'_>) -> Result<i64> {
-    if let Some(row) = t.query_opt(SAMPLE_HEAD, &[]).await? {
-        return Ok(epoch_from_row(row));
-    };
-
-    if let Some(row) = t.query_opt(CONSUMER_EPOCHS, &[]).await? {
+    if let Some(row) = t.query_opt(CURRENT_EPOCH, &[]).await? {
         return Ok(epoch_from_row(row));
     };
 
