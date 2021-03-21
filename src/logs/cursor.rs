@@ -3,18 +3,31 @@ use std::{collections::VecDeque, fmt};
 use tokio_postgres::Client;
 use tracing::trace;
 
-use crate::logs::{current_epoch, Entry, Result, Version};
+use crate::logs::{Entry, Result, Version};
 
 static FETCH_CONSUMER_POSITION: &str =
     "SELECT epoch, tx_position, position FROM log_consumer_positions WHERE \
      name = $1";
+/// For previous epochs, we want to see entries with any transaction id, but
+/// for the current one, we only care about entries with a tranasction id
+// before the current one.
+/// The `head` table expression allows us to find the current epoch.
+/// That means we can query for entries where:
+/// l.epoch < head.epoch => l.tx_id is in [1, +Inf)
+/// l.epoch = head.epoch => l.tx_id is in [1, head.tx_id)
 static FETCH_NEXT_ROW: &str = "\
-     SELECT epoch, tx_id as tx_position, id as position, key, meta, body, written_at
-     FROM logs
-     WHERE (epoch, tx_id, id) > ($1, $2, $3)
-     AND (epoch, tx_id) < ($4, txid_snapshot_xmin(txid_current_snapshot()))
-     ORDER BY epoch asc, tx_id asc, id asc
-     LIMIT $5";
+    WITH head as (
+        SELECT l.epoch
+        FROM logs as l
+        ORDER BY l.epoch desc
+        LIMIT 1
+    )
+     SELECT l.epoch, l.tx_id as tx_position, l.id as position, l.key, l.meta, l.body, l.written_at
+     FROM logs as l, head as h
+     WHERE (l.epoch, l.tx_id, l.id) > ($1, $2, $3)
+     AND (l.epoch, l.tx_id) < (h.epoch, txid_snapshot_xmin(txid_current_snapshot()))
+     ORDER BY l.epoch asc, l.tx_id asc, l.id asc
+     LIMIT $4";
 static UPSERT_CONSUMER_OFFSET: &str = "\
      INSERT INTO log_consumer_positions (name, epoch, tx_position, position) \
      values ($1, $2, $3, $4) \
@@ -50,7 +63,6 @@ impl Cursor {
         }
 
         let t = client.transaction().await?;
-        let epoch = current_epoch(&t).await?;
 
         let rows = t
             .query(
@@ -59,7 +71,6 @@ impl Cursor {
                     &self.last_seen_offset.epoch,
                     &self.last_seen_offset.tx_id,
                     &self.last_seen_offset.seq,
-                    &epoch,
                     &LIMIT_BUFFER,
                 ],
             )

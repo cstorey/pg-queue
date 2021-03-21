@@ -1,6 +1,6 @@
 use thiserror::Error;
 use tokio_postgres::{self, Client, Transaction};
-use tracing::{debug, warn};
+use tracing::debug;
 
 mod consumer;
 mod cursor;
@@ -8,12 +8,22 @@ mod producer;
 
 pub use self::{consumer::*, cursor::*, producer::*};
 
-static SAMPLE_HEAD: &str = "\
-    SELECT epoch, tx_id, txid_current() as current_tx_id
-    FROM logs ORDER BY epoch desc, tx_id desc
-    LIMIT 1";
-static CONSUMER_EPOCHS: &str =
-    "SELECT epoch, tx_position as tx_id, txid_current() as current_tx_id FROM log_consumer_positions ORDER BY epoch DESC LIMIT 1";
+static CURRENT_EPOCH: &str = "\
+WITH observed AS (
+    SELECT epoch, tx_id, txid_current() AS current_tx_id from logs
+    UNION ALL
+    SELECT epoch, tx_position AS tx_id, txid_current() AS current_tx_id
+    FROM log_consumer_positions
+    ORDER BY epoch DESC, tx_id DESC
+    LIMIT 1
+)
+SELECT CASE
+    WHEN observed.current_tx_id >= observed.tx_id THEN observed.epoch
+    ELSE observed.epoch + 1
+END as epoch
+FROM observed
+";
+
 static CREATE_TABLE_SQL: &str = include_str!("schema.sql");
 
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
@@ -49,38 +59,8 @@ pub async fn setup(conn: &Client) -> Result<()> {
 }
 
 async fn current_epoch(t: &Transaction<'_>) -> Result<i64> {
-    if let Some(epoch_row) = t.query_opt(SAMPLE_HEAD, &[]).await? {
-        let head_epoch: i64 = epoch_row.get("epoch");
-        let head_tx_id: i64 = epoch_row.get("tx_id");
-        let current_tx_id: i64 = epoch_row.get("current_tx_id");
-        if current_tx_id >= head_tx_id {
-            return Ok(head_epoch);
-        } else {
-            warn!(
-                ?head_epoch,
-                ?current_tx_id,
-                ?head_tx_id,
-                "Running behind in epoch, incrementing",
-            );
-            return Ok(head_epoch + 1);
-        }
-    };
-
-    if let Some(row) = t.query_opt(CONSUMER_EPOCHS, &[]).await? {
-        let head_epoch = row.get("epoch");
-        let head_tx_id: i64 = row.get("tx_id");
-        let current_tx_id: i64 = row.get("current_tx_id");
-        if current_tx_id >= head_tx_id {
-            return Ok(head_epoch);
-        } else {
-            warn!(
-                ?head_epoch,
-                ?current_tx_id,
-                ?head_tx_id,
-                "Running behind in epoch, incrementing",
-            );
-            return Ok(head_epoch + 1);
-        }
+    if let Some(row) = t.query_opt(CURRENT_EPOCH, &[]).await? {
+        return Ok(row.get("epoch"));
     };
 
     Ok(1)
