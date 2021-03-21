@@ -9,23 +9,11 @@ mod producer;
 pub use self::{consumer::*, cursor::*, producer::*};
 
 static CURRENT_EPOCH: &str = "\
-    WITH head as (
-        SELECT epoch, tx_id, txid_current() as current_tx_id
-        FROM logs
-        ORDER BY epoch desc, tx_id desc
-        LIMIT 1
-    ), consumers as (
-        SELECT epoch, tx_position as tx_id, txid_current() as current_tx_id
-        FROM log_consumer_positions
-        ORDER BY epoch desc, tx_id desc
-        LIMIT 1
-    ), combined as (
-        SELECT * FROM head
-        UNION ALL
-        SELECT * FROM consumers
-    )
-    SELECT * FROM combined
-    ORDER BY epoch desc, tx_id desc
+    SELECT epoch, tx_id, txid_current() AS current_tx_id from logs
+    UNION ALL
+    SELECT epoch, tx_position AS tx_id, txid_current() AS current_tx_id
+    FROM log_consumer_positions
+    ORDER BY epoch DESC, tx_id DESC
     LIMIT 1
 ";
 
