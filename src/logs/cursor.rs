@@ -8,11 +8,18 @@ use crate::logs::{Entry, Result, Version};
 static FETCH_CONSUMER_POSITION: &str =
     "SELECT epoch, tx_position, position FROM log_consumer_positions WHERE \
      name = $1";
+/// For previous epochs, we want to see entries with any transaction id, but
+/// for the current one, we only care about entries with a tranasction id
+// before the current one.
+/// The `head` table expression allows us to find the current epoch.
+/// That means we can query for entries where:
+/// l.epoch < head.epoch => l.tx_id is in [1, +Inf)
+/// l.epoch = head.epoch => l.tx_id is in [1, head.tx_id)
 static FETCH_NEXT_ROW: &str = "\
     WITH head as (
-        SELECT l.epoch, l.tx_id, txid_current() as current_tx_id
+        SELECT l.epoch
         FROM logs as l
-        ORDER BY l.epoch desc, tx_id desc
+        ORDER BY l.epoch desc
         LIMIT 1
     )
      SELECT l.epoch, l.tx_id as tx_position, l.id as position, l.key, l.meta, l.body, l.written_at
