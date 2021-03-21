@@ -1,7 +1,7 @@
 use std::{collections::VecDeque, fmt};
 
-use log::trace;
 use tokio_postgres::Client;
+use tracing::trace;
 
 use crate::logs::{current_epoch, Entry, Result, Version};
 
@@ -44,7 +44,7 @@ impl Cursor {
 
     pub(super) async fn poll(&mut self, client: &mut Client) -> Result<Option<Entry>> {
         if let Some(entry) = self.buf.pop_front() {
-            trace!("returning (from buffer): {:?}", entry);
+            trace!(version=?entry.version, "returning (from buffer)");
             self.last_seen_offset = entry.version;
             return Ok(Some(entry));
         }
@@ -64,14 +64,14 @@ impl Cursor {
                 ],
             )
             .await?;
-        trace!("next rows:{:?}", rows.len());
+        trace!(rows=?rows.len(), "next rows");
         for r in rows.into_iter() {
             let version = Version::from_row(&r);
             let key: Vec<u8> = r.get("key");
             let meta: Option<Vec<u8>> = r.get("meta");
             let data: Vec<u8> = r.get("body");
             let written_at = r.get("written_at");
-            trace!("buffering id: {:?}", version);
+            trace!(?version, "buffering");
             self.buf.push_back(Entry {
                 version,
                 written_at,
@@ -84,7 +84,7 @@ impl Cursor {
 
         if let Some(res) = self.buf.pop_front() {
             self.last_seen_offset = res.version;
-            trace!("returning (from db): {:?}", res);
+            trace!(version=?res.version, "returning (from db)");
             Ok(Some(res))
         } else {
             trace!("nothing yet");
@@ -97,7 +97,7 @@ impl Cursor {
         let rows = t.query(FETCH_CONSUMER_POSITION, &[&name]).await?;
         t.commit().await?;
 
-        trace!("next rows:{:?}", rows.len());
+        trace!(rows=?rows.len(), "next rows");
         let position = rows
             .into_iter()
             .next()
@@ -121,9 +121,9 @@ impl Cursor {
         .await?;
         t.commit().await?;
         trace!(
-            "Persisted position for consumer {:?}: {:?}",
-            self.name,
-            entry.version
+            name = ?self.name,
+            version = ?entry.version,
+            "Persisted position for consumer",
         );
         Ok(())
     }

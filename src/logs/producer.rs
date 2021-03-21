@@ -1,5 +1,5 @@
-use log::trace;
 use tokio_postgres::{self, Client};
+use tracing::trace;
 
 use crate::logs::{current_epoch, Error, Result, Version};
 
@@ -65,7 +65,7 @@ impl<'a> Batch<'a> {
             .next()
             .ok_or(Error::NoRowsFromInsert)?;
 
-        trace!("id: {:?}", id);
+        trace!(?id, "Produced");
         Ok(id)
     }
 
