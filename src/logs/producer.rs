@@ -1,5 +1,5 @@
-use log::trace;
 use tokio_postgres::{self, Client};
+use tracing::trace;
 
 use crate::logs::{current_epoch, Error, Result, Version};
 

@@ -1,6 +1,6 @@
-use log::{debug, warn};
 use thiserror::Error;
 use tokio_postgres::{self, Client, Transaction};
+use tracing::{debug, warn};
 
 mod consumer;
 mod cursor;

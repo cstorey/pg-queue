@@ -1,7 +1,7 @@
 use std::{collections::VecDeque, fmt};
 
-use log::trace;
 use tokio_postgres::Client;
+use tracing::trace;
 
 use crate::logs::{current_epoch, Entry, Result, Version};
 

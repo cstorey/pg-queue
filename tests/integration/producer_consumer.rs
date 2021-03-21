@@ -4,16 +4,17 @@ use futures::{
     stream::{self, StreamExt, TryStreamExt},
     FutureExt,
 };
-use log::{debug, info};
+
 use tokio_postgres::{self, NoTls};
+use tracing::{debug, info};
 
 use pg_queue::logs::{produce, produce_meta, Batch, Consumer, Version};
 
-use crate::{connect, load_pg_config, setup_db};
+use crate::{connect, load_pg_config, setup_db, setup_logging};
 
 #[tokio::test]
 async fn can_produce_none() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_produce_none";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -28,7 +29,7 @@ async fn can_produce_none() {
 
 #[tokio::test]
 async fn can_produce_one() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_produce_one";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -63,7 +64,7 @@ async fn can_produce_one() {
 
 #[tokio::test]
 async fn can_produce_with_metadata() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_produce_with_metadata";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -100,7 +101,7 @@ async fn can_produce_with_metadata() {
 
 #[tokio::test]
 async fn can_produce_several() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_produce_several";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -135,7 +136,7 @@ async fn can_produce_several() {
 
 #[tokio::test]
 async fn can_produce_ordered() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_produce_ordered";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -152,7 +153,7 @@ async fn can_produce_ordered() {
 
 #[tokio::test]
 async fn can_produce_in_batches() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_produce_in_batches";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -192,7 +193,7 @@ async fn can_produce_in_batches() {
 
 #[tokio::test]
 async fn can_produce_in_batches_with_metadata() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_produce_in_batches_with_metadata";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -223,7 +224,7 @@ async fn can_produce_in_batches_with_metadata() {
 
 #[tokio::test]
 async fn can_rollback_batches() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_rollback_batches";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -251,7 +252,7 @@ async fn can_rollback_batches() {
 
 #[tokio::test]
 async fn can_produce_incrementally() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_produce_incrementally";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -279,7 +280,7 @@ async fn can_produce_incrementally() {
 
 #[tokio::test]
 async fn can_consume_incrementally() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_consume_incrementally";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -317,7 +318,7 @@ async fn can_consume_incrementally() {
 
 #[tokio::test]
 async fn can_restart_consume_at_commit_point() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_restart_consume_at_commit_point";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -359,7 +360,7 @@ async fn can_restart_consume_at_commit_point() {
 
 #[tokio::test]
 async fn can_progress_without_commit() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_progress_without_commit";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -386,7 +387,7 @@ async fn can_progress_without_commit() {
 
 #[tokio::test]
 async fn can_consume_multiply() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_consume_multiply";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -437,7 +438,7 @@ async fn can_consume_multiply() {
 
 #[tokio::test]
 async fn producing_concurrently_should_never_leave_holes() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_producing_concurrently_should_never_leave_holes";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -500,7 +501,7 @@ async fn producing_concurrently_should_never_leave_holes() {
 
 #[tokio::test]
 async fn can_list_zero_consumer_offsets() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_list_zero_consumer_offsets";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -518,7 +519,7 @@ async fn can_list_zero_consumer_offsets() {
 
 #[tokio::test]
 async fn can_list_consumer_offset() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_list_consumer_offset";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -547,7 +548,7 @@ async fn can_list_consumer_offset() {
 
 #[tokio::test]
 async fn can_list_consumer_offsets() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_list_consumer_offsets";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -589,7 +590,7 @@ async fn can_list_consumer_offsets() {
 
 #[tokio::test]
 async fn can_discard_entries() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_discard_entries";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -629,7 +630,7 @@ async fn can_discard_entries() {
 
 #[tokio::test]
 async fn can_discard_on_empty() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_discard_on_empty";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -643,7 +644,7 @@ async fn can_discard_on_empty() {
 
 #[tokio::test]
 async fn can_discard_consumed() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_discard_consumed";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -682,7 +683,7 @@ async fn can_discard_consumed() {
 
 #[tokio::test]
 async fn can_discard_consumed_on_empty() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_discard_consumed_on_empty";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -694,7 +695,7 @@ async fn can_discard_consumed_on_empty() {
 
 #[tokio::test]
 async fn can_discard_after_written() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_discard_after_written";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -714,7 +715,7 @@ async fn can_discard_after_written() {
 
 #[tokio::test]
 async fn can_discard_consumed_without_losing_entries() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_discard_consumed_without_losing_entries";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -772,7 +773,7 @@ async fn can_discard_consumed_without_losing_entries() {
 
 #[tokio::test]
 async fn can_remove_consumer_offset() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_remove_consumer_offset";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -810,7 +811,7 @@ async fn can_remove_consumer_offset() {
 
 #[tokio::test]
 async fn removing_non_consumer_is_noop() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_removing_non_consumer_is_noop";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -845,7 +846,7 @@ async fn removing_non_consumer_is_noop() {
 
 #[tokio::test]
 async fn can_produce_consume_with_wait() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_produce_consume_with_wait";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -874,7 +875,7 @@ async fn can_produce_consume_with_wait() {
 
 #[tokio::test]
 async fn can_read_timestamp() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let start = chrono::Utc::now();
     let schema = "producer_consumer_can_read_timestamp";
     let pg_config = load_pg_config(schema).expect("pg-config");
@@ -909,7 +910,7 @@ async fn can_read_timestamp() {
 
 #[tokio::test]
 async fn can_batch_produce_pipelined() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_batch_produce_pipelined";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -956,7 +957,7 @@ async fn can_batch_produce_pipelined() {
 
 #[tokio::test]
 async fn can_batch_produce_with_transaction_then_insert_order() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_batch_produce_with_transaction_then_insert_order";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -995,7 +996,7 @@ async fn can_batch_produce_with_transaction_then_insert_order() {
 
 #[tokio::test]
 async fn can_recover_from_restore_without_without_resetting_epoch() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_recover_from_restore_without_without_resetting_epoch";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -1050,7 +1051,7 @@ async fn can_recover_from_restore_without_without_resetting_epoch() {
 
 #[tokio::test]
 async fn can_recover_from_transaction_id_reset_with_only_consumers() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_recover_from_transaction_id_reset_with_only_consumers";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
@@ -1104,7 +1105,7 @@ async fn can_recover_from_transaction_id_reset_with_only_consumers() {
 
 #[tokio::test]
 async fn can_recover_from_transaction_id_reset_with_entries() {
-    env_logger::try_init().unwrap_or(());
+    setup_logging();
     let schema = "producer_consumer_can_recover_from_transaction_id_reset_with_entries";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;

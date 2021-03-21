@@ -1,10 +1,12 @@
-use std::env;
+use std::{env, sync::Once};
 
 use anyhow::{Context, Result};
-use log::debug;
 use tokio_postgres::{self, Client, Config, NoTls};
+use tracing::debug;
 
 use pg_queue::logs::setup;
+use tracing_log::LogTracer;
+use tracing_subscriber::EnvFilter;
 
 mod original_interface;
 mod producer_consumer;
@@ -47,4 +49,22 @@ async fn setup_db(schema: &str) {
     t.commit().await.expect("commit");
 
     setup(&client).await.expect("setup");
+}
+
+pub(crate) fn setup_logging() {
+    static LOGGING: Once = Once::new();
+
+    LOGGING.call_once(|| {
+        LogTracer::init().expect("log-tracer init");
+        tracing::subscriber::set_global_default(
+            tracing_subscriber::FmtSubscriber::builder()
+                .with_env_filter(EnvFilter::from_default_env())
+                .with_ansi(false)
+                .with_timer(tracing_subscriber::fmt::time::ChronoUtc::rfc3339())
+                .with_thread_names(true)
+                .with_thread_ids(true)
+                .finish(),
+        )
+        .expect("set global tracer");
+    });
 }

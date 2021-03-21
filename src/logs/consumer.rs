@@ -2,13 +2,13 @@ use std::{collections::BTreeMap, fmt, sync::Arc, time};
 
 use chrono::{DateTime, Utc};
 use futures_util::stream::StreamExt;
-use log::{debug, info, trace};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     sync::Notify,
     time::{sleep, Duration},
 };
 use tokio_postgres::{self, tls::MakeTlsConnect, AsyncMessage, Client, Config, Connection, Socket};
+use tracing::{debug, info, trace};
 
 use crate::logs::{Cursor, Error, Result, Version};
 
