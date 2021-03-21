@@ -1,64 +1,20 @@
-#[macro_use]
-extern crate log;
+use std::{cmp, collections::BTreeMap, thread, time};
 
 use futures::{
-    pin_mut,
     stream::{self, StreamExt, TryStreamExt},
     FutureExt,
 };
-use pg_queue::logs::{batch, produce, produce_meta, setup, Consumer, Version};
-use tokio_postgres::{self, binary_copy::BinaryCopyInWriter, types::Type, Client, Config, NoTls};
+use log::{debug, info};
+use tokio_postgres::{self, NoTls};
 
-use anyhow::{Context, Result};
-use std::env;
-use std::thread;
-use std::time;
-use std::{cmp, collections::BTreeMap};
+use pg_queue::logs::{produce, produce_meta, Batch, Consumer, Version};
 
-const DEFAULT_URL: &str = "postgres://postgres@localhost/";
-
-fn load_pg_config(schema: &str) -> Result<Config> {
-    let url = env::var("POSTGRES_URL").unwrap_or_else(|_| DEFAULT_URL.to_string());
-    let mut config: Config = url.parse()?;
-    debug!("Use schema name: {}", schema);
-
-    config.options(&format!("-csearch_path={}", schema));
-
-    Ok(config)
-}
-
-async fn connect(config: &Config) -> Result<Client> {
-    let (client, conn) = config.connect(NoTls).await?;
-    tokio::spawn(conn);
-    Ok(client)
-}
-
-async fn setup_db(schema: &str) {
-    let pg_config = load_pg_config(schema).expect("pg-config");
-
-    let mut client = connect(&pg_config).await.expect("connect");
-
-    let t = client.transaction().await.expect("BEGIN");
-    t.execute(
-        &*format!("DROP SCHEMA IF EXISTS \"{}\" CASCADE", schema),
-        &[],
-    )
-    .await
-    .context("drop schema")
-    .expect("execute");
-    t.execute(&*format!("CREATE SCHEMA \"{}\"", schema), &[])
-        .await
-        .context("create schema")
-        .expect("execute");
-    t.commit().await.expect("commit");
-
-    setup(&client).await.expect("setup");
-}
+use crate::{connect, load_pg_config, setup_db};
 
 #[tokio::test]
 async fn can_produce_none() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_produce_none";
+    let schema = "producer_consumer_can_produce_none";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
@@ -73,7 +29,7 @@ async fn can_produce_none() {
 #[tokio::test]
 async fn can_produce_one() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_produce_one";
+    let schema = "producer_consumer_can_produce_one";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
@@ -108,7 +64,7 @@ async fn can_produce_one() {
 #[tokio::test]
 async fn can_produce_with_metadata() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_produce_with_metadata";
+    let schema = "producer_consumer_can_produce_with_metadata";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
@@ -145,7 +101,7 @@ async fn can_produce_with_metadata() {
 #[tokio::test]
 async fn can_produce_several() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_produce_several";
+    let schema = "producer_consumer_can_produce_several";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
@@ -180,7 +136,7 @@ async fn can_produce_several() {
 #[tokio::test]
 async fn can_produce_ordered() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_produce_ordered";
+    let schema = "producer_consumer_can_produce_ordered";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
@@ -197,7 +153,7 @@ async fn can_produce_ordered() {
 #[tokio::test]
 async fn can_produce_in_batches() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_produce_in_batches";
+    let schema = "producer_consumer_can_produce_in_batches";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
@@ -208,7 +164,7 @@ async fn can_produce_in_batches() {
     let mut client = connect(&pg_config).await.expect("connect");
 
     let v = {
-        let batch = batch(&mut client).await.expect("batch");
+        let batch = Batch::begin(&mut client).await.expect("batch");
         batch.produce(b"a", b"0").await.expect("produce");
         batch.produce(b"a", b"1").await.expect("produce");
         let v = batch.produce(b"a", b"2").await.expect("produce");
@@ -237,7 +193,7 @@ async fn can_produce_in_batches() {
 #[tokio::test]
 async fn can_produce_in_batches_with_metadata() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_produce_in_batches_with_metadata";
+    let schema = "producer_consumer_can_produce_in_batches_with_metadata";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
@@ -248,7 +204,7 @@ async fn can_produce_in_batches_with_metadata() {
     let mut client = connect(&pg_config).await.expect("connect");
 
     let v = {
-        let batch = batch(&mut client).await.expect("batch");
+        let batch = Batch::begin(&mut client).await.expect("batch");
         let v = batch
             .produce_meta(b"a", Some(b"one-meta".as_ref()), b"one")
             .await
@@ -268,7 +224,7 @@ async fn can_produce_in_batches_with_metadata() {
 #[tokio::test]
 async fn can_rollback_batches() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_rollback_batches";
+    let schema = "producer_consumer_can_rollback_batches";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
@@ -279,7 +235,7 @@ async fn can_rollback_batches() {
     let mut client = connect(&pg_config).await.expect("connect");
 
     let v = {
-        let batch = batch(&mut client).await.expect("batch");
+        let batch = Batch::begin(&mut client).await.expect("batch");
         batch.produce(b"a", b"0").await.expect("produce");
         batch.produce(b"a", b"1").await.expect("produce");
         let v = batch.produce(b"key", b"2").await.expect("produce");
@@ -296,7 +252,7 @@ async fn can_rollback_batches() {
 #[tokio::test]
 async fn can_produce_incrementally() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_produce_incrementally";
+    let schema = "producer_consumer_can_produce_incrementally";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
@@ -324,7 +280,7 @@ async fn can_produce_incrementally() {
 #[tokio::test]
 async fn can_consume_incrementally() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_consume_incrementally";
+    let schema = "producer_consumer_can_consume_incrementally";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
@@ -362,7 +318,7 @@ async fn can_consume_incrementally() {
 #[tokio::test]
 async fn can_restart_consume_at_commit_point() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_restart_consume_at_commit_point";
+    let schema = "producer_consumer_can_restart_consume_at_commit_point";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
@@ -404,7 +360,7 @@ async fn can_restart_consume_at_commit_point() {
 #[tokio::test]
 async fn can_progress_without_commit() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_progress_without_commit";
+    let schema = "producer_consumer_can_progress_without_commit";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
@@ -431,7 +387,7 @@ async fn can_progress_without_commit() {
 #[tokio::test]
 async fn can_consume_multiply() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_consume_multiply";
+    let schema = "producer_consumer_can_consume_multiply";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
@@ -482,19 +438,19 @@ async fn can_consume_multiply() {
 #[tokio::test]
 async fn producing_concurrently_should_never_leave_holes() {
     env_logger::try_init().unwrap_or(());
-    let schema = "producing_concurrently_should_never_leave_holes";
+    let schema = "producer_consumer_producing_concurrently_should_never_leave_holes";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
     let mut client1 = connect(&pg_config).await.expect("connect");
 
-    let b1 = batch(&mut client1).await.expect("batch b1");
+    let b1 = Batch::begin(&mut client1).await.expect("batch b1");
     let v = b1.produce(b"key", b"first").await.expect("produce 1");
 
     {
         let mut client2 = connect(&pg_config).await.expect("connect");
 
-        let b2 = batch(&mut client2).await.expect("batch b2");
+        let b2 = Batch::begin(&mut client2).await.expect("batch b2");
         b2.produce(b"key", b"second").await.expect("produce 2");
         b2.commit().await.expect("commit b1");
     }
@@ -545,7 +501,7 @@ async fn producing_concurrently_should_never_leave_holes() {
 #[tokio::test]
 async fn can_list_zero_consumer_offsets() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_list_zero_consumer_offsets";
+    let schema = "producer_consumer_can_list_zero_consumer_offsets";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
@@ -563,7 +519,7 @@ async fn can_list_zero_consumer_offsets() {
 #[tokio::test]
 async fn can_list_consumer_offset() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_list_consumer_offset";
+    let schema = "producer_consumer_can_list_consumer_offset";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
@@ -592,7 +548,7 @@ async fn can_list_consumer_offset() {
 #[tokio::test]
 async fn can_list_consumer_offsets() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_list_consumer_offsets";
+    let schema = "producer_consumer_can_list_consumer_offsets";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
@@ -634,7 +590,7 @@ async fn can_list_consumer_offsets() {
 #[tokio::test]
 async fn can_discard_entries() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_discard_entries";
+    let schema = "producer_consumer_can_discard_entries";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
@@ -674,7 +630,7 @@ async fn can_discard_entries() {
 #[tokio::test]
 async fn can_discard_on_empty() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_discard_on_empty";
+    let schema = "producer_consumer_can_discard_on_empty";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
     let mut cons = Consumer::connect(&pg_config, NoTls, "cleaner")
@@ -688,7 +644,7 @@ async fn can_discard_on_empty() {
 #[tokio::test]
 async fn can_discard_consumed() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_discard_consumed";
+    let schema = "producer_consumer_can_discard_consumed";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
@@ -727,7 +683,7 @@ async fn can_discard_consumed() {
 #[tokio::test]
 async fn can_discard_consumed_on_empty() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_discard_consumed_on_empty";
+    let schema = "producer_consumer_can_discard_consumed_on_empty";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
     let mut cons = Consumer::connect(&pg_config, NoTls, "cleaner")
@@ -739,7 +695,7 @@ async fn can_discard_consumed_on_empty() {
 #[tokio::test]
 async fn can_discard_after_written() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_discard_after_written";
+    let schema = "producer_consumer_can_discard_after_written";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
@@ -759,7 +715,7 @@ async fn can_discard_after_written() {
 #[tokio::test]
 async fn can_discard_consumed_without_losing_entries() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_discard_consumed_without_losing_entries";
+    let schema = "producer_consumer_can_discard_consumed_without_losing_entries";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
@@ -817,7 +773,7 @@ async fn can_discard_consumed_without_losing_entries() {
 #[tokio::test]
 async fn can_remove_consumer_offset() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_remove_consumer_offset";
+    let schema = "producer_consumer_can_remove_consumer_offset";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
@@ -855,7 +811,7 @@ async fn can_remove_consumer_offset() {
 #[tokio::test]
 async fn removing_non_consumer_is_noop() {
     env_logger::try_init().unwrap_or(());
-    let schema = "removing_non_consumer_is_noop";
+    let schema = "producer_consumer_removing_non_consumer_is_noop";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
@@ -890,7 +846,7 @@ async fn removing_non_consumer_is_noop() {
 #[tokio::test]
 async fn can_produce_consume_with_wait() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_produce_consume_with_wait";
+    let schema = "producer_consumer_can_produce_consume_with_wait";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
     let mut cons = Consumer::connect(&pg_config, NoTls, "default")
@@ -920,7 +876,7 @@ async fn can_produce_consume_with_wait() {
 async fn can_read_timestamp() {
     env_logger::try_init().unwrap_or(());
     let start = chrono::Utc::now();
-    let schema = "can_read_timestamp";
+    let schema = "producer_consumer_can_read_timestamp";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
     let mut cons = Consumer::connect(&pg_config, NoTls, "default")
@@ -954,7 +910,7 @@ async fn can_read_timestamp() {
 #[tokio::test]
 async fn can_batch_produce_pipelined() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_batch_produce_pipelined";
+    let schema = "producer_consumer_can_batch_produce_pipelined";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
     let mut cons = Consumer::connect(&pg_config, NoTls, "default")
@@ -963,7 +919,7 @@ async fn can_batch_produce_pipelined() {
 
     let mut client = connect(&pg_config).await.expect("connect");
 
-    let batch = batch(&mut client).await.expect("batch");
+    let batch = Batch::begin(&mut client).await.expect("batch");
 
     let nitems: usize = 1024;
     let items = (0..nitems).map(|i| i.to_string()).collect::<Vec<_>>();
@@ -1001,15 +957,15 @@ async fn can_batch_produce_pipelined() {
 #[tokio::test]
 async fn can_batch_produce_with_transaction_then_insert_order() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_batch_produce_with_transaction_then_insert_order";
+    let schema = "producer_consumer_can_batch_produce_with_transaction_then_insert_order";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
     let mut client1 = connect(&pg_config).await.expect("connect");
     let mut client2 = connect(&pg_config).await.expect("connect");
 
-    let batch1 = batch(&mut client1).await.expect("batch");
-    let batch2 = batch(&mut client2).await.expect("batch");
+    let batch1 = Batch::begin(&mut client1).await.expect("batch");
+    let batch2 = Batch::begin(&mut client2).await.expect("batch");
 
     batch1.produce(b"a", b"a-1").await.expect("produce");
     batch2.produce(b"b", b"b-1").await.expect("produce");
@@ -1040,7 +996,7 @@ async fn can_batch_produce_with_transaction_then_insert_order() {
 #[tokio::test]
 async fn can_recover_from_restore_without_without_resetting_epoch() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_recover_from_restore_without_without_resetting_epoch";
+    let schema = "producer_consumer_can_recover_from_restore_without_without_resetting_epoch";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
@@ -1052,20 +1008,12 @@ async fn can_recover_from_restore_without_without_resetting_epoch() {
     // Assume the backup had advanced to an absurdly high transaction ID.
     let backup_tx_id = 1i64;
     let original_epoch = 23i64;
-    let sink = tx
-        .copy_in(
-            "COPY log_consumer_positions (name, epoch, tx_position, position) FROM STDIN BINARY",
-        )
-        .await
-        .expect("copy in logs");
-    let writer = BinaryCopyInWriter::new(sink, &[Type::TEXT, Type::INT8, Type::INT8, Type::INT8]);
-    pin_mut!(writer);
-    writer
-        .as_mut()
-        .write(&[&"default", &original_epoch, &backup_tx_id, &5i64])
-        .await
-        .expect("write row");
-    writer.finish().await.expect("expect finish");
+
+    tx.execute(
+        "INSERT INTO log_consumer_positions (name, epoch, tx_position, position) VALUES ($1, $2, $3, $4)",
+        &[&"default", &original_epoch, &backup_tx_id, &5i64]
+    ).await.expect("insert log");
+
     tx.commit().await.expect("COMMIT");
 
     let consumers = Consumer::consumers(&mut client).await.expect("consumers");
@@ -1073,7 +1021,7 @@ async fn can_recover_from_restore_without_without_resetting_epoch() {
     let default_pos = consumers["default"];
 
     info!("Append new entries");
-    let batch = batch(&mut client).await.expect("batch start");
+    let batch = Batch::begin(&mut client).await.expect("batch start");
     let ver = batch.produce(b"_", b"second").await.expect("produce");
     batch.commit().await.expect("commit");
     debug!("appended: {:?}", ver);
@@ -1103,7 +1051,7 @@ async fn can_recover_from_restore_without_without_resetting_epoch() {
 #[tokio::test]
 async fn can_recover_from_transaction_id_reset_with_only_consumers() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_recover_from_transaction_id_reset_with_only_consumers";
+    let schema = "producer_consumer_can_recover_from_transaction_id_reset_with_only_consumers";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
@@ -1115,20 +1063,12 @@ async fn can_recover_from_transaction_id_reset_with_only_consumers() {
     // Assume the backup had advanced to an absurdly high transaction ID.
     let backup_tx_id = 1_000_000_000_000_000_000i64;
     let original_epoch = 23i64;
-    let sink = tx
-        .copy_in(
-            "COPY log_consumer_positions (name, epoch, tx_position, position) FROM STDIN BINARY",
-        )
-        .await
-        .expect("copy in logs");
-    let writer = BinaryCopyInWriter::new(sink, &[Type::TEXT, Type::INT8, Type::INT8, Type::INT8]);
-    pin_mut!(writer);
-    writer
-        .as_mut()
-        .write(&[&"default", &original_epoch, &backup_tx_id, &5i64])
-        .await
-        .expect("write row");
-    writer.finish().await.expect("expect finish");
+
+    tx.execute(
+        "INSERT INTO log_consumer_positions (name, epoch, tx_position, position) VALUES ($1, $2, $3, $4)",
+        &[&"default", &original_epoch, &backup_tx_id, &5i64]
+    ).await.expect("insert log");
+
     tx.commit().await.expect("COMMIT");
 
     let consumers = Consumer::consumers(&mut client).await.expect("consumers");
@@ -1136,7 +1076,7 @@ async fn can_recover_from_transaction_id_reset_with_only_consumers() {
     let default_pos = consumers["default"];
 
     info!("Append new entries");
-    let batch = batch(&mut client).await.expect("batch start");
+    let batch = Batch::begin(&mut client).await.expect("batch start");
     let ver = batch.produce(b"_", b"second").await.expect("produce");
     batch.commit().await.expect("commit");
     debug!("appended: {:?}", ver);
@@ -1165,7 +1105,7 @@ async fn can_recover_from_transaction_id_reset_with_only_consumers() {
 #[tokio::test]
 async fn can_recover_from_transaction_id_reset_with_entries() {
     env_logger::try_init().unwrap_or(());
-    let schema = "can_recover_from_transaction_id_reset_with_entries";
+    let schema = "producer_consumer_can_recover_from_transaction_id_reset_with_entries";
     let pg_config = load_pg_config(schema).expect("pg-config");
     setup_db(schema).await;
 
@@ -1176,47 +1116,28 @@ async fn can_recover_from_transaction_id_reset_with_entries() {
     info!("Restoring from backup");
     // Assume the backup had advanced to an absurdly high transaction ID.
     let backup_tx_id = 1_000_000_000_000_000_000i64;
-    let sink = tx
-        .copy_in("COPY logs (epoch, tx_id, id, key, body) FROM STDIN BINARY")
-        .await
-        .expect("copy in logs");
-    let writer = BinaryCopyInWriter::new(
-        sink,
-        &[Type::INT8, Type::INT8, Type::INT8, Type::BYTEA, Type::BYTEA],
-    );
-    pin_mut!(writer);
-    writer
-        .as_mut()
-        .write(&[
+    tx.execute(
+        "INSERT INTO logs (epoch, tx_id, id, key, body) VALUES ($1, $2, $3, $4, $5)",
+        &[
             &23i64,
             &(backup_tx_id + 1),
             &10i64,
             &(b"_" as &[u8]),
             &(b"first" as &[u8]),
-        ])
-        .await
-        .expect("write row");
-    writer.finish().await.expect("expect finish");
+        ],
+    )
+    .await
+    .expect("insert log");
 
-    let sink = tx
-        .copy_in(
-            "COPY log_consumer_positions (epoch, name, position, tx_position) FROM STDIN BINARY",
-        )
-        .await
-        .expect("copy in logs");
-    let writer = BinaryCopyInWriter::new(sink, &[Type::INT8, Type::TEXT, Type::INT8, Type::INT8]);
-    pin_mut!(writer);
-    writer
-        .as_mut()
-        .write(&[&23i64, &"default", &backup_tx_id, &5i64])
-        .await
-        .expect("write row");
-    writer.finish().await.expect("expect finish");
+    tx.execute(
+        "INSERT INTO log_consumer_positions (epoch, name, position, tx_position) VALUES ($1, $2, $3, $4)",
+        &[&23i64, &"default", &backup_tx_id, &5i64]
+    ).await.expect("insert log");
 
     tx.commit().await.expect("COMMIT");
 
     info!("Append new entries");
-    let batch = batch(&mut client).await.expect("batch start");
+    let batch = Batch::begin(&mut client).await.expect("batch start");
     let ver = batch.produce(b"_", b"second").await.expect("produce");
     batch.commit().await.expect("commit");
     debug!("appended: {:?}", ver);
