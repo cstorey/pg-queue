@@ -1,16 +1,45 @@
 use tokio_postgres::{self, Client};
 use tracing::trace;
 
-use crate::logs::{current_epoch, Error, Result, Version};
+use crate::logs::{Error, Result, Version};
 
-static INSERT_ROW_SQL: &str =
-    "INSERT INTO logs (epoch, key, meta, body) values($1, $2, $3, $4) RETURNING epoch, tx_id as tx_position, id as position";
+/// This query is a little odd, as while PostgreSQL distribute the set of
+/// backwards index scans over a set of UNION ALL'ed subqueries if they all
+/// use an index, adding a CTE can will result in it materializing each of the
+/// UNION'ed table expressions, then sorting and taking the last item. The
+/// downside is that it's comparatively slow to plan.
+static INSERT_ROW_SQL: &str = "\
+WITH observed_epoch AS (
+    SELECT epoch, tx_id, txid_current() AS current_tx_id from logs
+    UNION ALL
+    SELECT epoch, tx_position AS tx_id, txid_current() AS current_tx_id
+    FROM log_consumer_positions
+    ORDER BY epoch DESC, tx_id DESC
+    LIMIT 1
+),
+fallback AS (
+    SELECT 1 AS epoch
+),
+insertion_epoch AS (
+    SELECT CASE
+        WHEN o.current_tx_id >= o.tx_id THEN o.epoch
+        ELSE o.epoch + 1
+    END AS epoch
+    FROM observed_epoch AS o
+    UNION ALL
+    SELECT epoch FROM fallback
+    ORDER BY epoch desc
+    LIMIT 1
+)
+INSERT INTO logs (epoch, key, meta, body)
+SELECT e.epoch, $1, $2, $3
+FROM insertion_epoch AS e
+RETURNING epoch, tx_id as tx_position, id as position";
 static SEND_NOTIFY_SQL: &str = "SELECT pg_notify('logs', '')";
 
 pub struct Batch<'a> {
     transaction: tokio_postgres::Transaction<'a>,
     insert: tokio_postgres::Statement,
-    epoch: i64,
 }
 
 pub async fn produce(client: &mut Client, key: &[u8], body: &[u8]) -> Result<Version> {
@@ -35,12 +64,10 @@ pub async fn produce_meta(
 impl<'a> Batch<'a> {
     pub async fn begin(client: &mut Client) -> Result<Batch<'_>> {
         let t = client.transaction().await?;
-        let epoch = current_epoch(&t).await?;
         let insert = t.prepare(INSERT_ROW_SQL).await?;
         let batch = Batch {
             transaction: t,
             insert,
-            epoch,
         };
         Ok(batch)
     }
@@ -57,7 +84,7 @@ impl<'a> Batch<'a> {
     ) -> Result<Version> {
         let rows = self
             .transaction
-            .query(&self.insert, &[&self.epoch, &key, &meta, &body])
+            .query(&self.insert, &[&key, &meta, &body])
             .await?;
         let id = rows
             .iter()
