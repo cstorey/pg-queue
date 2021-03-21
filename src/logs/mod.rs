@@ -1,5 +1,5 @@
 use thiserror::Error;
-use tokio_postgres::{self, Client, Transaction};
+use tokio_postgres::{self, Client};
 use tracing::debug;
 
 mod consumer;
@@ -7,22 +7,6 @@ mod cursor;
 mod producer;
 
 pub use self::{consumer::*, cursor::*, producer::*};
-
-static CURRENT_EPOCH: &str = "\
-WITH observed AS (
-    SELECT epoch, tx_id, txid_current() AS current_tx_id from logs
-    UNION ALL
-    SELECT epoch, tx_position AS tx_id, txid_current() AS current_tx_id
-    FROM log_consumer_positions
-    ORDER BY epoch DESC, tx_id DESC
-    LIMIT 1
-)
-SELECT CASE
-    WHEN observed.current_tx_id >= observed.tx_id THEN observed.epoch
-    ELSE observed.epoch + 1
-END as epoch
-FROM observed
-";
 
 static CREATE_TABLE_SQL: &str = include_str!("schema.sql");
 
@@ -56,14 +40,6 @@ pub async fn setup(conn: &Client) -> Result<()> {
     }
     debug!("Ran setup SQL ok");
     Ok(())
-}
-
-async fn current_epoch(t: &Transaction<'_>) -> Result<i64> {
-    if let Some(row) = t.query_opt(CURRENT_EPOCH, &[]).await? {
-        return Ok(row.get("epoch"));
-    };
-
-    Ok(1)
 }
 
 impl Version {
