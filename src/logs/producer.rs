@@ -65,7 +65,7 @@ impl<'a> Batch<'a> {
             .next()
             .ok_or(Error::NoRowsFromInsert)?;
 
-        trace!("id: {:?}", id);
+        trace!(?id, "Produced");
         Ok(id)
     }
 

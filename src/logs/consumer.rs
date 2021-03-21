@@ -75,12 +75,12 @@ impl Consumer {
         let mut messages = futures::stream::poll_fn(|cx| conn.poll_message(cx));
         while let Some(item) = messages.next().await.transpose()? {
             match item {
-                AsyncMessage::Notice(err) => info!("Db notice: {}", err),
-                AsyncMessage::Notification(n) => {
-                    trace!("Received notification: {:?}", n);
+                AsyncMessage::Notice(notice) => info!(?notice, "Db notice"),
+                AsyncMessage::Notification(notification) => {
+                    trace!(?notification, "Received notification");
                     notify.notify_one();
                 }
-                _ => trace!("Other message received"),
+                message => trace!(?message, "Other message received"),
             }
         }
 
@@ -163,7 +163,7 @@ pub async fn wait_until_visible(
     let deadline = time::Instant::now() + timeout;
     client.execute(LISTEN, &[]).await?;
     for backoff in 0..64 {
-        trace!("Checking for visibility of: {:?}", version,);
+        trace!(?version, "Checking for visibility");
         let (is_visible, txmin, tx_current) = client
             .query(IS_VISIBLE, &[&version.tx_id])
             .await?
@@ -177,12 +177,7 @@ pub async fn wait_until_visible(
                 )
             })
             .ok_or(Error::NoRowsFromVisibilityCheck)?;
-        trace!(
-            "Visibility check: is_visible:{:?}; xmin:{:?}; current: {:?}",
-            is_visible,
-            txmin,
-            tx_current
-        );
+        trace!(?is_visible, ?txmin, ?tx_current, "Visibility check",);
 
         let now = time::Instant::now();
 
@@ -197,12 +192,7 @@ pub async fn wait_until_visible(
         let remaining = deadline - now;
         let backoff = Duration::from_millis((2u64).pow(backoff));
         let pause = std::cmp::min(remaining, backoff);
-        trace!(
-            "remaining: {:?}; backoff: {:?}; Pause for: {:?}",
-            remaining,
-            backoff,
-            pause
-        );
+        trace!(?remaining, ?pause, "Pause before retry",);
         sleep(pause).await;
     }
 

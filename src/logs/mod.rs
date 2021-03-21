@@ -57,25 +57,29 @@ async fn current_epoch(t: &Transaction<'_>) -> Result<i64> {
             return Ok(head_epoch);
         } else {
             warn!(
-                "Running behind in epoch {:?}? {:?} > {:?}",
-                head_epoch, current_tx_id, head_tx_id
+                ?head_epoch,
+                ?current_tx_id,
+                ?head_tx_id,
+                "Running behind in epoch, incrementing",
             );
             return Ok(head_epoch + 1);
         }
     };
 
     if let Some(row) = t.query_opt(CONSUMER_EPOCHS, &[]).await? {
-        let epoch = row.get("epoch");
-        let tx_id: i64 = row.get("tx_id");
+        let head_epoch = row.get("epoch");
+        let head_tx_id: i64 = row.get("tx_id");
         let current_tx_id: i64 = row.get("current_tx_id");
-        if current_tx_id >= tx_id {
-            return Ok(epoch);
+        if current_tx_id >= head_tx_id {
+            return Ok(head_epoch);
         } else {
             warn!(
-                "Running behind in epoch {:?}? {:?} > {:?}",
-                epoch, current_tx_id, tx_id
+                ?head_epoch,
+                ?current_tx_id,
+                ?head_tx_id,
+                "Running behind in epoch, incrementing",
             );
-            return Ok(epoch + 1);
+            return Ok(head_epoch + 1);
         }
     };
 

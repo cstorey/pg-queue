@@ -16,7 +16,7 @@ const DEFAULT_URL: &str = "postgres://postgres@localhost/";
 fn load_pg_config(schema: &str) -> Result<Config> {
     let url = env::var("POSTGRES_URL").unwrap_or_else(|_| DEFAULT_URL.to_string());
     let mut config: Config = url.parse()?;
-    debug!("Use schema name: {}", schema);
+    debug!(?schema, "Use schema");
 
     config.options(&format!("-csearch_path={}", schema));
 
