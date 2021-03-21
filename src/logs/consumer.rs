@@ -52,8 +52,8 @@ impl Consumer {
         Self::new(notify, client, name).await
     }
 
-    async fn new(notify: Arc<Notify>, mut client: Client, name: &str) -> Result<Self> {
-        let cursor = Cursor::load(&mut client, name).await?;
+    async fn new(notify: Arc<Notify>, client: Client, name: &str) -> Result<Self> {
+        let cursor = Cursor::load(&client, name).await?;
 
         let consumer = Consumer {
             client,

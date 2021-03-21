@@ -10,6 +10,7 @@ use tracing_subscriber::EnvFilter;
 
 mod original_interface;
 mod producer_consumer;
+mod reusable_connections;
 
 const DEFAULT_URL: &str = "postgres://postgres@localhost/";
 
