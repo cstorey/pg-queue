@@ -49,41 +49,32 @@ pub async fn setup(conn: &Client) -> Result<()> {
 }
 
 async fn current_epoch(t: &Transaction<'_>) -> Result<i64> {
-    if let Some(epoch_row) = t.query_opt(SAMPLE_HEAD, &[]).await? {
-        let head_epoch: i64 = epoch_row.get("epoch");
-        let head_tx_id: i64 = epoch_row.get("tx_id");
-        let current_tx_id: i64 = epoch_row.get("current_tx_id");
-        if current_tx_id >= head_tx_id {
-            return Ok(head_epoch);
-        } else {
-            warn!(
-                ?head_epoch,
-                ?current_tx_id,
-                ?head_tx_id,
-                "Running behind in epoch, incrementing",
-            );
-            return Ok(head_epoch + 1);
-        }
+    if let Some(row) = t.query_opt(SAMPLE_HEAD, &[]).await? {
+        return Ok(epoch_from_row(row));
     };
 
     if let Some(row) = t.query_opt(CONSUMER_EPOCHS, &[]).await? {
-        let head_epoch = row.get("epoch");
-        let head_tx_id: i64 = row.get("tx_id");
-        let current_tx_id: i64 = row.get("current_tx_id");
-        if current_tx_id >= head_tx_id {
-            return Ok(head_epoch);
-        } else {
-            warn!(
-                ?head_epoch,
-                ?current_tx_id,
-                ?head_tx_id,
-                "Running behind in epoch, incrementing",
-            );
-            return Ok(head_epoch + 1);
-        }
+        return Ok(epoch_from_row(row));
     };
 
     Ok(1)
+}
+
+fn epoch_from_row(epoch_row: tokio_postgres::Row) -> i64 {
+    let head_epoch: i64 = epoch_row.get("epoch");
+    let head_tx_id: i64 = epoch_row.get("tx_id");
+    let current_tx_id: i64 = epoch_row.get("current_tx_id");
+    if current_tx_id >= head_tx_id {
+        head_epoch
+    } else {
+        warn!(
+            ?head_epoch,
+            ?current_tx_id,
+            ?head_tx_id,
+            "Running behind in epoch, incrementing",
+        );
+        head_epoch + 1
+    }
 }
 
 impl Version {
