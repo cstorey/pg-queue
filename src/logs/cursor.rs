@@ -62,9 +62,7 @@ impl Cursor {
             return Ok(Some(entry));
         }
 
-        let t = client.transaction().await?;
-
-        let rows = t
+        let rows = client
             .query(
                 FETCH_NEXT_ROW,
                 &[
@@ -91,7 +89,6 @@ impl Cursor {
                 data,
             })
         }
-        t.commit().await?;
 
         if let Some(res) = self.buf.pop_front() {
             self.last_seen_offset = res.version;
@@ -121,18 +118,17 @@ impl Cursor {
         client: &mut C,
         entry: &Entry,
     ) -> Result<()> {
-        let t = client.transaction().await?;
-        t.execute(
-            UPSERT_CONSUMER_OFFSET,
-            &[
-                &self.name,
-                &entry.version.epoch,
-                &entry.version.tx_id,
-                &entry.version.seq,
-            ],
-        )
-        .await?;
-        t.commit().await?;
+        client
+            .execute(
+                UPSERT_CONSUMER_OFFSET,
+                &[
+                    &self.name,
+                    &entry.version.epoch,
+                    &entry.version.tx_id,
+                    &entry.version.seq,
+                ],
+            )
+            .await?;
         trace!(
             name = ?self.name,
             version = ?entry.version,
@@ -142,9 +138,7 @@ impl Cursor {
     }
 
     pub async fn clear_offset(&mut self, client: &mut Client) -> Result<()> {
-        let t = client.transaction().await?;
-        t.execute(DISCARD_CONSUMER, &[&self.name]).await?;
-        t.commit().await?;
+        client.execute(DISCARD_CONSUMER, &[&self.name]).await?;
         Ok(())
     }
 }
