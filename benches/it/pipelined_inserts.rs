@@ -1,6 +1,6 @@
 use std::convert::TryInto;
 
-use criterion::{black_box, BenchmarkId, Criterion, Throughput};
+use criterion::{black_box, BatchSize, BenchmarkId, Criterion, Throughput};
 use futures::{stream, StreamExt, TryStreamExt};
 use pg_queue::logs::Batch;
 
@@ -20,25 +20,28 @@ pub(crate) fn batch_pipeline_insert(c: &mut Criterion) {
         group.throughput(Throughput::Elements(*nitems));
         group.bench_with_input(BenchmarkId::from_parameter(nitems), nitems, |b, &nitems| {
             runtime.block_on(setup_db(schema)).expect("setup db");
-            let mut client = runtime.block_on(connect(&pg_config)).expect("connect");
             let bodies = (0..nitems).map(|i| format!("{}", i)).collect::<Vec<_>>();
-            b.iter(|| {
-                runtime.block_on(async {
-                    let batch = Batch::begin(&mut client).await.expect("batch");
+            b.iter_batched_ref(
+                || runtime.block_on(connect(&pg_config)).expect("connect"),
+                |client| {
+                    runtime.block_on(async {
+                        let batch = Batch::begin(client).await.expect("batch");
 
-                    stream::iter(bodies.iter())
-                        .map(|it| batch.produce(b"test", it.as_bytes()))
-                        .buffered((nitems + 1).try_into().unwrap())
-                        .try_for_each(|v| async move {
-                            black_box(v);
-                            Ok(())
-                        })
-                        .await
-                        .expect("insert");
+                        stream::iter(bodies.iter())
+                            .map(|it| batch.produce(b"test", it.as_bytes()))
+                            .buffered((nitems + 1).try_into().unwrap())
+                            .try_for_each(|v| async move {
+                                black_box(v);
+                                Ok(())
+                            })
+                            .await
+                            .expect("insert");
 
-                    batch.commit().await.expect("commit");
-                })
-            })
+                        batch.commit().await.expect("commit");
+                    })
+                },
+                BatchSize::SmallInput,
+            )
         });
     }
     group.finish();
