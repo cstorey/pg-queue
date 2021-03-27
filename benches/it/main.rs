@@ -8,6 +8,7 @@ use tracing::debug;
 use tracing_log::LogTracer;
 use tracing_subscriber::EnvFilter;
 
+mod consumer;
 mod pipelined_inserts;
 mod seq_inserts;
 
@@ -73,5 +74,6 @@ criterion_group!(
     benches,
     seq_inserts::batch_seq_insert,
     pipelined_inserts::batch_pipeline_insert,
+    consumer::consume,
 );
 criterion_main!(benches);
