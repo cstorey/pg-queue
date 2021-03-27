@@ -41,18 +41,17 @@ async fn example_over_transaction() -> Result<()> {
 
     let mut pg = connect(&pg_config).await.context("connect")?;
 
-    let produced_version = produce(&mut pg, b"test", b"test")
-        .await
-        .context("produce")?;
+    let mut t = pg.transaction().await.context("BEGIN")?;
 
-    wait_until_visible(&pg, produced_version, Duration::from_secs(1))
-        .await
-        .context("wait visible")?;
+    let produced_version = produce(&mut t, b"test", b"test").await.context("produce")?;
 
+    t.commit().await?;
     let mut t = pg.transaction().await.context("BEGIN")?;
     let mut cursor = Cursor::load(&t, "florble").await.context("load cursor")?;
 
     let res = cursor.poll(&mut t).await?;
+
+    t.commit().await?;
 
     assert_eq!(res.map(|it| it.version), Some(produced_version));
 
