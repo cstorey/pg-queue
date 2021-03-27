@@ -71,15 +71,7 @@ pub(crate) fn setup_logging() {
 
 criterion_group!(
     benches,
-    seq_inserts::insert_seq_0000,
-    seq_inserts::insert_seq_0001,
-    seq_inserts::insert_seq_0016,
-    seq_inserts::insert_seq_0256,
-    seq_inserts::insert_seq_4096,
-    pipelined_inserts::insert_pipeline_0000,
-    pipelined_inserts::insert_pipeline_0001,
-    pipelined_inserts::insert_pipeline_0016,
-    pipelined_inserts::insert_pipeline_0256,
-    pipelined_inserts::insert_pipeline_4096,
+    seq_inserts::batch_seq_insert,
+    pipelined_inserts::batch_pipeline_insert,
 );
 criterion_main!(benches);
