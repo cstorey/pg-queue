@@ -1,7 +1,7 @@
 use std::{env, sync::Once};
 
 use anyhow::{Context, Result};
-use bencher::{benchmark_group, benchmark_main};
+use criterion::{criterion_group, criterion_main};
 use pg_queue::logs::setup;
 use tokio_postgres::{Client, Config, NoTls};
 use tracing::debug;
@@ -69,7 +69,7 @@ pub(crate) fn setup_logging() {
     });
 }
 
-benchmark_group!(
+criterion_group!(
     benches,
     seq_inserts::insert_seq_0000,
     seq_inserts::insert_seq_0001,
@@ -82,4 +82,4 @@ benchmark_group!(
     pipelined_inserts::insert_pipeline_0256,
     pipelined_inserts::insert_pipeline_4096,
 );
-benchmark_main!(benches);
+criterion_main!(benches);
