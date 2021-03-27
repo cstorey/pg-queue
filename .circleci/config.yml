@@ -60,3 +60,4 @@ jobs:
         name: Waiting for Postgres to be ready
         command: ./bin/await-postgres
     - run: env RUST_BACKTRACE=1 cargo test --locked
+    - run: env RUST_BACKTRACE=1 cargo test --locked --benches
