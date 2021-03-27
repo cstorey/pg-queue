@@ -2,7 +2,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 
-use pg_queue::logs::{produce, wait_until_visible, Cursor};
+use pg_queue::logs::{produce, wait_until_visible, Batch, Cursor};
+use tracing::debug;
 
 use crate::{connect, load_pg_config, setup_db, setup_logging};
 
@@ -54,6 +55,64 @@ async fn example_over_transaction() -> Result<()> {
     t.commit().await?;
 
     assert_eq!(res.map(|it| it.version), Some(produced_version));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn example_consuming_in_chunks() -> Result<()> {
+    setup_logging();
+    let schema = "example_consuming_in_chunks";
+    let pg_config = load_pg_config(schema).context("pg-config")?;
+    setup_db(schema).await;
+
+    let mut pg = connect(&pg_config).await.context("connect")?;
+
+    let mut produced = Vec::new();
+
+    let mut t = pg.transaction().await.context("BEGIN")?;
+    let b = Batch::begin(&mut t).await.context("batch start")?;
+
+    for i in 0usize..16 {
+        produced.push(b.produce(b"test", i.to_string().as_bytes()).await?);
+    }
+
+    b.commit().await.context("finish batch")?;
+    t.commit().await.context("commit")?;
+
+    wait_until_visible(
+        &pg,
+        produced.last().cloned().unwrap(),
+        Duration::from_secs(1),
+    )
+    .await
+    .context("await visible")?;
+
+    let mut observed = Vec::new();
+
+    'chunk_loop: loop {
+        let mut t = pg.transaction().await.context("BEGIN")?;
+        let mut cursor = Cursor::load(&t, "consumer").await.context("load cursor")?;
+        debug!(?cursor, "Loaded cursor");
+
+        for _ in 0usize..4 {
+            if let Some(it) = cursor.poll(&mut t).await? {
+                debug!(version=?it.version, "Found item");
+                observed.push(it.version);
+                cursor
+                    .commit_upto(&mut t, &it)
+                    .await
+                    .context("commit_upto")?;
+            } else {
+                debug!("Ran out of items");
+                break 'chunk_loop;
+            }
+        }
+
+        t.commit().await?;
+    }
+
+    assert_eq!(observed, produced);
 
     Ok(())
 }

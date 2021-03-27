@@ -116,7 +116,11 @@ impl Cursor {
         Ok(position)
     }
 
-    pub async fn commit_upto(&mut self, client: &mut Client, entry: &Entry) -> Result<()> {
+    pub async fn commit_upto<C: GenericClient>(
+        &mut self,
+        client: &mut C,
+        entry: &Entry,
+    ) -> Result<()> {
         let t = client.transaction().await?;
         t.execute(
             UPSERT_CONSUMER_OFFSET,
