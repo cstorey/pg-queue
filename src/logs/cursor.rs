@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, fmt};
 
-use tokio_postgres::Client;
+use tokio_postgres::{Client, GenericClient};
 use tracing::trace;
 
 use crate::logs::{Entry, Result, Version};
@@ -44,7 +44,7 @@ pub struct Cursor {
 }
 
 impl Cursor {
-    pub async fn load(client: &mut Client, name: &str) -> Result<Self> {
+    pub async fn load<C: GenericClient>(client: &C, name: &str) -> Result<Self> {
         let position = Self::fetch_consumer_pos(client, name).await?;
         let consumer = Cursor {
             name: name.to_string(),
@@ -55,16 +55,14 @@ impl Cursor {
         Ok(consumer)
     }
 
-    pub(super) async fn poll(&mut self, client: &mut Client) -> Result<Option<Entry>> {
+    pub async fn poll<C: GenericClient>(&mut self, client: &mut C) -> Result<Option<Entry>> {
         if let Some(entry) = self.buf.pop_front() {
             trace!(version=?entry.version, "returning (from buffer)");
             self.last_seen_offset = entry.version;
             return Ok(Some(entry));
         }
 
-        let t = client.transaction().await?;
-
-        let rows = t
+        let rows = client
             .query(
                 FETCH_NEXT_ROW,
                 &[
@@ -91,7 +89,6 @@ impl Cursor {
                 data,
             })
         }
-        t.commit().await?;
 
         if let Some(res) = self.buf.pop_front() {
             self.last_seen_offset = res.version;
@@ -103,10 +100,8 @@ impl Cursor {
         }
     }
 
-    async fn fetch_consumer_pos(client: &mut Client, name: &str) -> Result<Version> {
-        let t = client.transaction().await?;
-        let rows = t.query(FETCH_CONSUMER_POSITION, &[&name]).await?;
-        t.commit().await?;
+    async fn fetch_consumer_pos<C: GenericClient>(client: &C, name: &str) -> Result<Version> {
+        let rows = client.query(FETCH_CONSUMER_POSITION, &[&name]).await?;
 
         trace!(rows=?rows.len(), "next rows");
         let position = rows
@@ -118,19 +113,22 @@ impl Cursor {
         Ok(position)
     }
 
-    pub async fn commit_upto(&mut self, client: &mut Client, entry: &Entry) -> Result<()> {
-        let t = client.transaction().await?;
-        t.execute(
-            UPSERT_CONSUMER_OFFSET,
-            &[
-                &self.name,
-                &entry.version.epoch,
-                &entry.version.tx_id,
-                &entry.version.seq,
-            ],
-        )
-        .await?;
-        t.commit().await?;
+    pub async fn commit_upto<C: GenericClient>(
+        &mut self,
+        client: &mut C,
+        entry: &Entry,
+    ) -> Result<()> {
+        client
+            .execute(
+                UPSERT_CONSUMER_OFFSET,
+                &[
+                    &self.name,
+                    &entry.version.epoch,
+                    &entry.version.tx_id,
+                    &entry.version.seq,
+                ],
+            )
+            .await?;
         trace!(
             name = ?self.name,
             version = ?entry.version,
@@ -140,9 +138,7 @@ impl Cursor {
     }
 
     pub async fn clear_offset(&mut self, client: &mut Client) -> Result<()> {
-        let t = client.transaction().await?;
-        t.execute(DISCARD_CONSUMER, &[&self.name]).await?;
-        t.commit().await?;
+        client.execute(DISCARD_CONSUMER, &[&self.name]).await?;
         Ok(())
     }
 }

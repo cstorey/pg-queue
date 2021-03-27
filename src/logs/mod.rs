@@ -1,5 +1,5 @@
 use thiserror::Error;
-use tokio_postgres::{self, Client, Transaction};
+use tokio_postgres::{self, Client, GenericClient};
 use tracing::debug;
 
 mod consumer;
@@ -58,7 +58,7 @@ pub async fn setup(conn: &Client) -> Result<()> {
     Ok(())
 }
 
-async fn current_epoch(t: &Transaction<'_>) -> Result<i64> {
+async fn current_epoch<C: GenericClient>(t: &C) -> Result<i64> {
     if let Some(row) = t.query_opt(CURRENT_EPOCH, &[]).await? {
         return Ok(row.get("epoch"));
     };

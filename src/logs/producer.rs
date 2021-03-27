@@ -1,4 +1,4 @@
-use tokio_postgres::{self, Client};
+use tokio_postgres::{self, Client, GenericClient};
 use tracing::trace;
 
 use crate::logs::{current_epoch, Error, Result, Version};
@@ -13,7 +13,7 @@ pub struct Batch<'a> {
     epoch: i64,
 }
 
-pub async fn produce(client: &mut Client, key: &[u8], body: &[u8]) -> Result<Version> {
+pub async fn produce<C: GenericClient>(client: &mut C, key: &[u8], body: &[u8]) -> Result<Version> {
     let batch = Batch::begin(client).await?;
     let version = batch.produce(key, body).await?;
     batch.commit().await?;
@@ -33,7 +33,7 @@ pub async fn produce_meta(
 }
 
 impl<'a> Batch<'a> {
-    pub async fn begin(client: &mut Client) -> Result<Batch<'_>> {
+    pub async fn begin<C: GenericClient>(client: &mut C) -> Result<Batch<'_>> {
         let t = client.transaction().await?;
         let epoch = current_epoch(&t).await?;
         let insert = t.prepare(INSERT_ROW_SQL).await?;
