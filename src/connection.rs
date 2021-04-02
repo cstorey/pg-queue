@@ -18,7 +18,7 @@ pub(crate) struct NotificationStream<S, T> {
     conn: Connection<S, T>,
 }
 
-pub(crate) async fn notify_on_notification<
+pub async fn notify_on_notification<
     S: AsyncRead + AsyncWrite + Unpin,
     T: AsyncRead + AsyncWrite + Unpin,
 >(

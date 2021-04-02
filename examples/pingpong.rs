@@ -1,15 +1,15 @@
-use std::{env, sync::Arc, task::Poll};
+use std::{env, sync::Arc};
 
 use anyhow::{Context, Result};
-use futures::{ready, FutureExt, Stream, StreamExt};
-use pg_queue::logs::{Cursor, Entry};
-
-use tokio::{
-    io::{AsyncRead, AsyncWrite},
-    sync::Notify,
+use futures::FutureExt;
+use pg_queue::{
+    connection::notify_on_notification,
+    logs::{Cursor, Entry},
 };
-use tokio_postgres::{AsyncMessage, Client, Config, Connection, NoTls, Notification};
-use tracing::{debug, field, info, instrument, trace, Instrument};
+
+use tokio::sync::Notify;
+use tokio_postgres::{Client, Config, NoTls};
+use tracing::{debug, field, instrument, Instrument};
 use tracing_log::LogTracer;
 use tracing_subscriber::EnvFilter;
 
@@ -58,7 +58,7 @@ async fn run_pingpong(pg: Config, from: &str, to: &str) -> Result<()> {
     let span = tracing::error_span!("connection", from = field::Empty, to = field::Empty);
     span.record("from", &from);
     span.record("to", &to);
-    tokio::spawn(run_connection(conn, notify.clone()).instrument(span));
+    tokio::spawn(notify_on_notification(conn, notify.clone()).instrument(span));
 
     pg_queue::logs::listen(&client).await.context("LISTEN")?;
 
@@ -106,61 +106,4 @@ async fn handle_item(client: &mut Client, from: &str, to: &str, it: &Entry) -> R
     }
 
     Ok(())
-}
-
-#[instrument(skip(conn, notify))]
-async fn run_connection<S: AsyncRead + AsyncWrite + Unpin, T: AsyncRead + AsyncWrite + Unpin>(
-    conn: Connection<S, T>,
-    notify: Arc<Notify>,
-) -> Result<()> {
-    debug!("Listening for notifies on connection");
-
-    let mut notifies = NotificationStream::new(conn);
-
-    while let Some(notification) = notifies.next().await.transpose()? {
-        debug!(?notification, "Received notification");
-        notify.notify_one();
-    }
-
-    Ok(())
-}
-
-struct NotificationStream<S, T> {
-    conn: Connection<S, T>,
-}
-
-impl<S, T> NotificationStream<S, T> {
-    fn new(conn: Connection<S, T>) -> Self {
-        Self { conn }
-    }
-}
-
-impl<S: AsyncRead + AsyncWrite + Unpin, T: AsyncRead + AsyncWrite + Unpin> Stream
-    for NotificationStream<S, T>
-{
-    type Item = Result<Notification, tokio_postgres::Error>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        let maybe_message = ready!(self.conn.poll_message(cx));
-        let message = match maybe_message {
-            Some(Ok(item)) => item,
-            Some(Err(e)) => return Poll::Ready(Some(Err(e))),
-            None => return Poll::Ready(None),
-        };
-
-        match message {
-            AsyncMessage::Notice(notice) => {
-                info!(?notice, "Db notice");
-                Poll::Pending
-            }
-            AsyncMessage::Notification(notification) => Poll::Ready(Some(Ok(notification))),
-            message => {
-                trace!(?message, "Other message received");
-                Poll::Pending
-            }
-        }
-    }
 }
