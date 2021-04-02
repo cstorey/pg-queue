@@ -74,7 +74,7 @@ impl Cursor {
                 ],
             )
             .await?;
-        trace!(rows=?rows.len(), "next rows");
+        trace!(rows=?rows.len(), after=%self.last_seen_offset, "next rows");
         for r in rows.into_iter() {
             let version = Version::from_row(&r);
             let key: Vec<u8> = r.get("key");
