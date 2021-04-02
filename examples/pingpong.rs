@@ -60,7 +60,7 @@ async fn run_pingpong(pg: Config, from: &str, to: &str) -> Result<()> {
     span.record("to", &to);
     tokio::spawn(run_connection(conn, notify.clone()).instrument(span));
 
-    client.execute("LISTEN logs", &[]).await.context("LISTEN")?;
+    pg_queue::logs::listen(&client).await.context("LISTEN")?;
 
     let mut cursor = Cursor::load(&client, from).await.context("load cursor")?;
     loop {

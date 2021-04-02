@@ -96,7 +96,8 @@ impl Consumer {
     }
 
     pub async fn wait_next(&mut self) -> Result<Entry> {
-        self.client.execute(LISTEN, &[]).await?;
+        listen(&self.client).await?;
+
         loop {
             if let Some(entry) = self.poll_item().await? {
                 return Ok(entry);
@@ -194,6 +195,11 @@ pub async fn wait_until_visible(
         sleep(pause).await;
     }
 
+    Ok(())
+}
+
+pub async fn listen(client: &Client) -> Result<()> {
+    client.execute(LISTEN, &[]).await?;
     Ok(())
 }
 
