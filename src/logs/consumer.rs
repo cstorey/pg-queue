@@ -130,14 +130,11 @@ impl Consumer {
     pub async fn discard_consumed(&mut self) -> Result<()> {
         let t = self.client.transaction().await?;
         let rows = t.query(LIST_CONSUMERS, &[]).await?;
-        if let Some(min_version) = rows.into_iter().map(|r| Version::from_row(&r)).min() {
+        let min = rows.into_iter().map(|r| Version::from_row(&r)).min();
+        t.commit().await?;
+        if let Some(min_version) = min {
             debug!(?min_version, "Discarding consumed upto");
-            t.execute(
-                DISCARD_ENTRIES,
-                &[&min_version.epoch, &min_version.tx_id, &min_version.seq],
-            )
-            .await?;
-            t.commit().await?;
+            self.discard_upto(min_version).await?;
         }
         Ok(())
     }
