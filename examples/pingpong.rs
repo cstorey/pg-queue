@@ -46,7 +46,7 @@ async fn main() -> Result<()> {
     let b = tokio::spawn(run_pingpong(pg, StdRng::from_entropy(), "pong", "ping")).map(|res| res?);
 
     {
-        let version = pg_queue::logs::produce(&mut client, b"ping", b"ping")
+        let version = pg_queue::logs::produce(&mut client, b"ping", 1usize.to_string().as_bytes())
             .await
             .context("produce")?;
         debug!(?version, "Produced seed");
@@ -95,7 +95,13 @@ async fn handle_item(client: &mut Client, from: &str, to: &str, it: &Entry) -> R
     debug!("Found item");
 
     if from.as_bytes() == it.key {
-        let version = pg_queue::logs::produce(client, to.as_bytes(), &it.data)
+        let value = std::str::from_utf8(&it.data).context("decode utf8")?;
+        let num: u64 = value.parse().context("parse body")?;
+        debug!("Found number: {}", num);
+
+        let next = num + 1;
+
+        let version = pg_queue::logs::produce(client, to.as_bytes(), next.to_string().as_bytes())
             .await
             .context("produce")?;
         debug!(%version, "Produced");
