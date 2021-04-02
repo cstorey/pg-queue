@@ -119,20 +119,16 @@ impl Consumer {
     }
 
     pub async fn discard_upto(&mut self, limit: Version) -> Result<()> {
-        let t = self.client.transaction().await?;
         debug!(?limit, "Discarding entries upto");
-        t.execute(DISCARD_ENTRIES, &[&limit.epoch, &limit.tx_id, &limit.seq])
+        self.client
+            .execute(DISCARD_ENTRIES, &[&limit.epoch, &limit.tx_id, &limit.seq])
             .await?;
-        t.commit().await?;
         Ok(())
     }
 
     pub async fn discard_consumed(&mut self) -> Result<()> {
-        let t = self.client.transaction().await?;
-        let rows = t.query(LIST_CONSUMERS, &[]).await?;
-        let min = rows.into_iter().map(|r| Version::from_row(&r)).min();
-        t.commit().await?;
-        if let Some(min_version) = min {
+        let rows = self.client.query(LIST_CONSUMERS, &[]).await?;
+        if let Some(min_version) = rows.into_iter().map(|r| Version::from_row(&r)).min() {
             debug!(?min_version, "Discarding consumed upto");
             self.discard_upto(min_version).await?;
         }
