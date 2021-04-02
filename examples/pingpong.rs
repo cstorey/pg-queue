@@ -1,4 +1,8 @@
-use std::{env, sync::Arc};
+use std::{
+    env,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result};
 use futures::{future::try_join_all, FutureExt};
@@ -7,11 +11,19 @@ use pg_queue::{
     logs::{Cursor, Entry},
 };
 
-use tokio::sync::Notify;
+use rand::{
+    distributions::Uniform,
+    prelude::{Distribution, StdRng},
+    RngCore, SeedableRng,
+};
+use tokio::{sync::Notify, time::timeout};
 use tokio_postgres::{Config, GenericClient, NoTls};
-use tracing::{debug, field, instrument, Instrument};
+use tracing::{debug, field, instrument, trace, Instrument};
 use tracing_log::LogTracer;
 use tracing_subscriber::EnvFilter;
+
+const MIN_PAUSE: Duration = Duration::from_millis(1000);
+const MAX_PAUSE: Duration = Duration::from_secs(30);
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
@@ -39,7 +51,8 @@ async fn main() -> Result<()> {
 
     let instances = ["a", "b", "c", "d", "e"];
     for (x, y) in instances.iter().zip(instances.iter().cycle().skip(1)) {
-        let task = tokio::spawn(run_pingpong(pg.clone(), x, y)).map({
+        let rng = StdRng::from_entropy();
+        let task = tokio::spawn(run_pingpong(pg.clone(), rng, x, y)).map({
             let id = (x.to_string(), y.to_string());
             |res| {
                 res.with_context({
@@ -66,8 +79,8 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-#[instrument(skip(pg))]
-async fn run_pingpong(pg: Config, from: &str, to: &str) -> Result<()> {
+#[instrument(skip(pg, rng))]
+async fn run_pingpong<R: RngCore>(pg: Config, mut rng: R, from: &str, to: &str) -> Result<()> {
     let notify = Arc::new(Notify::new());
 
     let (mut client, conn) = pg.connect(NoTls).await.context("connect pg")?;
@@ -78,50 +91,63 @@ async fn run_pingpong(pg: Config, from: &str, to: &str) -> Result<()> {
 
     pg_queue::logs::listen(&client).await.context("LISTEN")?;
 
+    let mut base_pause = MIN_PAUSE;
+    let jitter_factor = Uniform::from(1f64..1.5);
+
+    let mut cursor = Cursor::load(&client, from).await.context("load cursor")?;
     loop {
         let mut t = client.transaction().await?;
-        let mut cursor = Cursor::load(&t, from).await.context("load cursor")?;
+
         if let Some(it) = cursor.poll(&mut t).await.context("cursor poll")? {
-            handle_item(&mut t, from, to, &it).await.context("handle")?;
+            if from.as_bytes() == it.key {
+                handle_item(&mut t, to, &it).await.context("handle")?;
+            } else {
+                debug!(version=%it.version, "Ignoring item");
+            }
 
             cursor.commit_upto(&mut t, &it).await.context("commit")?;
+
             t.commit().await?;
+
+            base_pause = MIN_PAUSE;
         } else {
-            debug!("Await notification");
-            notify.notified().await;
-            debug!("Notification received");
+            let pause = base_pause
+                .mul_f64(jitter_factor.sample(&mut rng))
+                .min(MAX_PAUSE);
+            debug!(timeout=?pause, "Await notification");
+            let started = Instant::now();
+            match timeout(base_pause, notify.notified()).await {
+                Ok(()) => {
+                    debug!(after=?started.elapsed(), "Notification received");
+                }
+                Err(_) => {
+                    trace!(?pause, after=?started.elapsed(), "Not notified within timeout, retrying with backoff");
+                }
+            }
+            base_pause = base_pause.mul_f64(1.5).min(MAX_PAUSE);
         }
     }
 }
 
 #[instrument(
-    skip(client,from,to,it),
+    skip(client,to,it),
     fields(
     version=%it.version,
     key=?String::from_utf8_lossy(&it.key),
 ))]
-async fn handle_item<C: GenericClient>(
-    client: &mut C,
-    from: &str,
-    to: &str,
-    it: &Entry,
-) -> Result<()> {
+async fn handle_item<C: GenericClient>(client: &mut C, to: &str, it: &Entry) -> Result<()> {
     debug!("Found item");
 
-    if from.as_bytes() == it.key {
-        let value = std::str::from_utf8(&it.data).context("decode utf8")?;
-        let num: u64 = value.parse().context("parse body")?;
-        debug!("Found number: {}", num);
+    let value = std::str::from_utf8(&it.data).context("decode utf8")?;
+    let num: u64 = value.parse().context("parse body")?;
+    debug!("Found number: {}", num);
 
-        let next = num + 1;
+    let next = num + 1;
 
-        let version = pg_queue::logs::produce(client, to.as_bytes(), next.to_string().as_bytes())
-            .await
-            .context("produce")?;
-        debug!(%version, "Produced");
-    } else {
-        debug!("Ignoring item");
-    }
+    let version = pg_queue::logs::produce(client, to.as_bytes(), next.to_string().as_bytes())
+        .await
+        .context("produce")?;
+    debug!(%version, "Produced");
 
     Ok(())
 }
