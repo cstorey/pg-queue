@@ -1,4 +1,4 @@
--- This file is split on empty lines (two consecutive newlines) and each chunk
+-- This file is split on instances of "-- Split" followed by a newline, and each chunk
 -- is run as a single batch.
 
 CREATE TABLE IF NOT EXISTS logs (
@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS log_consumer_positions (
     position BIGINT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS logs_timestamp_idx ON logs (written_at);
+
+-- Split
 
 DO $$
     BEGIN
@@ -25,7 +27,11 @@ DO $$
     END
 $$;
 
+-- Split
+
 CREATE INDEX IF NOT EXISTS logs_offset_idx ON logs(tx_id, id);
+
+-- Split
 
 DO $$
     BEGIN
@@ -40,6 +46,8 @@ DO $$
     END
 $$;
 
+-- Split
+
 DO $$
     BEGIN
         IF NOT EXISTS (
@@ -52,6 +60,8 @@ DO $$
         END IF;
     END
 $$;
+
+-- Split
 
 DO $$
     BEGIN
@@ -70,6 +80,8 @@ DO $$
     END
 $$;
 
+-- Split
+
 DO $$
     BEGIN
         IF NOT EXISTS (
@@ -85,8 +97,12 @@ DO $$
     END
 $$;
 
+-- Split
+
 CREATE INDEX IF NOT EXISTS logs_epoch_offset_idx ON logs(epoch, tx_id, id);
 DROP INDEX IF EXISTS logs_offset_idx;
+
+-- Split
 
 DO $$
     BEGIN
