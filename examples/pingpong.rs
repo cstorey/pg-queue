@@ -62,8 +62,8 @@ async fn run_pingpong(pg: Config, from: &str, to: &str) -> Result<()> {
 
     client.execute("LISTEN logs", &[]).await.context("LISTEN")?;
 
+    let mut cursor = Cursor::load(&client, from).await.context("load cursor")?;
     loop {
-        let mut cursor = Cursor::load(&client, from).await.context("load cursor")?;
         if let Some(it) = cursor.poll(&mut client).await.context("cursor poll")? {
             handle_item(&mut client, from, to, &it)
                 .await
