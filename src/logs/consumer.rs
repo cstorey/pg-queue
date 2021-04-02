@@ -21,7 +21,7 @@ static IS_VISIBLE: &str = "\
         SELECT $1 < xmin as lt_xmin, xmin, current FROM snapshot";
 static LIST_CONSUMERS: &str =
     "SELECT name, epoch, tx_position, position FROM log_consumer_positions";
-static DISCARD_ENTRIES: &str = "DELETE FROM logs WHERE (tx_id, id) <= ($1, $2)";
+static DISCARD_ENTRIES: &str = "DELETE FROM logs WHERE (epoch, tx_id, id) <= ($1, $2, $3)";
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Entry {
@@ -120,7 +120,8 @@ impl Consumer {
 
     pub async fn discard_upto(&mut self, limit: Version) -> Result<()> {
         let t = self.client.transaction().await?;
-        t.execute(DISCARD_ENTRIES, &[&limit.tx_id, &limit.seq])
+        debug!(?limit, "Discarding entries upto");
+        t.execute(DISCARD_ENTRIES, &[&limit.epoch, &limit.tx_id, &limit.seq])
             .await?;
         t.commit().await?;
         Ok(())
@@ -130,8 +131,12 @@ impl Consumer {
         let t = self.client.transaction().await?;
         let rows = t.query(LIST_CONSUMERS, &[]).await?;
         if let Some(min_version) = rows.into_iter().map(|r| Version::from_row(&r)).min() {
-            t.execute(DISCARD_ENTRIES, &[&min_version.tx_id, &min_version.seq])
-                .await?;
+            debug!(?min_version, "Discarding consumed upto");
+            t.execute(
+                DISCARD_ENTRIES,
+                &[&min_version.epoch, &min_version.tx_id, &min_version.seq],
+            )
+            .await?;
             t.commit().await?;
         }
         Ok(())
