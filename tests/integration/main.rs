@@ -8,7 +8,6 @@ use pg_queue::logs::setup;
 use tracing_log::LogTracer;
 use tracing_subscriber::EnvFilter;
 
-mod original_interface;
 mod producer_consumer;
 mod reusable_connections;
 
