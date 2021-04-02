@@ -114,8 +114,6 @@ async fn run_pingpong<R: RngCore>(pg: Config, mut rng: R, from: &str, to: &str) 
             cursor.commit_upto(&mut t, &it).await.context("commit")?;
 
             t.commit().await?;
-
-            base_pause = MIN_PAUSE;
         } else {
             // Close the transaction, as postgres will only deliver notifications
             // that happened-before the start of the transaction (I think).
@@ -130,6 +128,7 @@ async fn run_pingpong<R: RngCore>(pg: Config, mut rng: R, from: &str, to: &str) 
             match timeout(base_pause, rx.recv()).await {
                 Ok(Some(notification)) => {
                     debug!(after=?started.elapsed(), ?notification, "Notification received");
+                    base_pause = MIN_PAUSE;
                 }
                 Ok(None) => {
                     // We should get a proper error at some point.
