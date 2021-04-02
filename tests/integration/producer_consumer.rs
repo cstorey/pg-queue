@@ -1174,3 +1174,95 @@ async fn can_recover_from_transaction_id_reset_with_entries() {
 
     assert_eq!(vec!["first", "second"], observed);
 }
+
+#[tokio::test]
+async fn can_recover_from_transaction_id_reset_when_committing_offsets() {
+    setup_logging();
+    let schema = "can_recover_from_transaction_id_reset_when_committing_offsets";
+    let pg_config = load_pg_config(schema).expect("pg-config");
+    setup_db(schema).await;
+
+    let mut client = connect(&pg_config).await.expect("connect");
+
+    let tx = client.transaction().await.expect("BEGIN");
+
+    info!("Restoring from backup");
+    // Assume the backup had advanced to an absurdly high transaction ID.
+    let backup_tx_id = 1_000_000_000_000_000_000i64;
+    tx.execute(
+        "INSERT INTO logs (epoch, tx_id, id, key, body) VALUES ($1, $2, $3, $4, $5)",
+        &[
+            &23i64,
+            &(backup_tx_id + 1),
+            &10i64,
+            &(b"_" as &[u8]),
+            &(b"first" as &[u8]),
+        ],
+    )
+    .await
+    .expect("insert log");
+
+    tx.execute(
+        "INSERT INTO log_consumer_positions (epoch, name, position, tx_position) VALUES ($1, $2, $3, $4)",
+        &[&23i64, &"default", &backup_tx_id, &5i64]
+    ).await.expect("insert log");
+
+    tx.commit().await.expect("COMMIT");
+
+    info!("Append new entries");
+    let batch = Batch::begin(&mut client).await.expect("batch start");
+    let second = batch.produce(b"_", b"second").await.expect("produce");
+    debug!("second: {:?}", second);
+    let third = batch.produce(b"_", b"third").await.expect("produce");
+    debug!("third: {:?}", third);
+    batch.commit().await.expect("commit");
+
+    let row = client
+        .query_one("SELECT txid_current() as tx_id", &[])
+        .await
+        .expect("read current transction ID");
+    let tx_id: i64 = row.get("tx_id");
+    assert!(
+        tx_id < backup_tx_id,
+        "Current transaction ID {:?} should be behind backup: {:?}",
+        tx_id,
+        backup_tx_id
+    );
+    drop(client);
+
+    info!("Reconnect");
+
+    let mut cons = Consumer::connect(&pg_config, NoTls, "default")
+        .await
+        .expect("consumer");
+
+    cons.wait_until_visible(third, time::Duration::from_secs(1))
+        .await
+        .expect("wait for version");
+
+    while let Some(item) = cons.poll().await.expect("item") {
+        if item.version <= second {
+            debug!(version=?item.version, "committing offset");
+            cons.commit_upto(&item).await.expect("commit upto");
+        } else {
+            break;
+        }
+    }
+
+    drop(cons);
+
+    info!("Reconnect");
+
+    let mut cons = Consumer::connect(&pg_config, NoTls, "default")
+        .await
+        .expect("consumer");
+
+    let mut observed = Vec::new();
+
+    while let Some(item) = cons.poll().await.expect("item") {
+        debug!(version=?item.version, data=?String::from_utf8_lossy(&item.data), "Found");
+        observed.push(String::from_utf8(item.data).expect("from utf8"));
+    }
+
+    assert_eq!(vec!["third"], observed);
+}
