@@ -1,13 +1,12 @@
 use std::{
     env,
-    sync::Arc,
     time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
-use futures::{future::try_join_all, FutureExt};
+use futures::{future::try_join_all, FutureExt, StreamExt};
 use pg_queue::{
-    connection::notify_on_notification,
+    connection::NotificationStream,
     logs::{Cursor, Entry},
 };
 
@@ -16,9 +15,13 @@ use rand::{
     prelude::{Distribution, StdRng},
     RngCore, SeedableRng,
 };
-use tokio::{sync::Notify, time::timeout};
-use tokio_postgres::{Config, GenericClient, NoTls};
-use tracing::{debug, field, instrument, trace, Instrument};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    sync::mpsc::UnboundedSender,
+    time::timeout,
+};
+use tokio_postgres::{Config, Connection, GenericClient, NoTls};
+use tracing::{debug, field, instrument, trace, warn, Instrument};
 use tracing_log::LogTracer;
 use tracing_subscriber::EnvFilter;
 
@@ -81,13 +84,16 @@ async fn main() -> Result<()> {
 
 #[instrument(skip(pg, rng))]
 async fn run_pingpong<R: RngCore>(pg: Config, mut rng: R, from: &str, to: &str) -> Result<()> {
-    let notify = Arc::new(Notify::new());
+    // We use an unbounded channel here as the same process both mediates SQL
+    // commands, and feeding us notifications, so if the channel is full, and
+    // we're still waiting on a response from the server, then we'll deadlock.
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
     let (mut client, conn) = pg.connect(NoTls).await.context("connect pg")?;
     let span = tracing::error_span!("connection", from = field::Empty, to = field::Empty);
     span.record("from", &from);
     span.record("to", &to);
-    tokio::spawn(notify_on_notification(conn, notify.clone()).instrument(span));
+    tokio::spawn(siphon_notifications(conn, tx).instrument(span));
 
     pg_queue::logs::listen(&client).await.context("LISTEN")?;
 
@@ -111,14 +117,23 @@ async fn run_pingpong<R: RngCore>(pg: Config, mut rng: R, from: &str, to: &str) 
 
             base_pause = MIN_PAUSE;
         } else {
+            // Close the transaction, as postgres will only deliver notifications
+            // that happened-before the start of the transaction (I think).
+            t.commit().await?;
+
             let pause = base_pause
                 .mul_f64(jitter_factor.sample(&mut rng))
                 .min(MAX_PAUSE);
+
             debug!(timeout=?pause, "Await notification");
             let started = Instant::now();
-            match timeout(base_pause, notify.notified()).await {
-                Ok(()) => {
-                    debug!(after=?started.elapsed(), "Notification received");
+            match timeout(base_pause, rx.recv()).await {
+                Ok(Some(notification)) => {
+                    debug!(after=?started.elapsed(), ?notification, "Notification received");
+                }
+                Ok(None) => {
+                    // We should get a proper error at some point.
+                    warn!(after=?started.elapsed(), "Connection exited?");
                 }
                 Err(_) => {
                     trace!(?pause, after=?started.elapsed(), "Not notified within timeout, retrying with backoff");
@@ -148,6 +163,26 @@ async fn handle_item<C: GenericClient>(client: &mut C, to: &str, it: &Entry) -> 
         .await
         .context("produce")?;
     debug!(%version, "Produced");
+
+    Ok(())
+}
+
+pub async fn siphon_notifications<
+    S: AsyncRead + AsyncWrite + Unpin,
+    T: AsyncRead + AsyncWrite + Unpin,
+>(
+    conn: Connection<S, T>,
+    notify: UnboundedSender<tokio_postgres::Notification>,
+) -> Result<()> {
+    debug!("Listening for notifies on connection");
+
+    let mut notifies = NotificationStream::new(conn);
+
+    while let Some(notification) = notifies.next().await.transpose()? {
+        debug!(?notification, ?notify, "Received notification");
+        notify.send(notification)?;
+        trace!(?notify, "Notified");
+    }
 
     Ok(())
 }
