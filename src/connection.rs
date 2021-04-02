@@ -10,11 +10,11 @@ use tokio::{
     sync::Notify,
 };
 use tokio_postgres::{AsyncMessage, Connection};
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 
 use crate::logs::Result;
 
-pub(crate) struct NotificationStream<S, T> {
+pub struct NotificationStream<S, T> {
     conn: Connection<S, T>,
 }
 
@@ -30,15 +30,16 @@ pub async fn notify_on_notification<
     let mut notifies = NotificationStream::new(conn);
 
     while let Some(notification) = notifies.next().await.transpose()? {
-        debug!(?notification, "Received notification");
+        debug!(?notification, ?notify, "Received notification");
         notify.notify_waiters();
+        trace!(?notify, "Notified");
     }
 
     Ok(())
 }
 
 impl<S, T> NotificationStream<S, T> {
-    pub(crate) fn new(conn: Connection<S, T>) -> Self {
+    pub fn new(conn: Connection<S, T>) -> Self {
         Self { conn }
     }
 }
