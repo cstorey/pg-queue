@@ -1,16 +1,15 @@
-use std::{env, time::Duration};
+use std::{env, sync::Arc, task::Poll};
 
 use anyhow::{Context, Result};
-use futures::FutureExt;
+use futures::{ready, FutureExt, Stream, StreamExt};
 use pg_queue::logs::{Cursor, Entry};
-use rand::{
-    distributions::Uniform,
-    prelude::{Distribution, StdRng},
-    RngCore, SeedableRng,
+
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    sync::Notify,
 };
-use tokio::time::sleep;
-use tokio_postgres::{Client, Config, NoTls};
-use tracing::{debug, instrument};
+use tokio_postgres::{AsyncMessage, Client, Config, Connection, NoTls, Notification};
+use tracing::{debug, field, info, instrument, trace, Instrument};
 use tracing_log::LogTracer;
 use tracing_subscriber::EnvFilter;
 
@@ -36,14 +35,8 @@ async fn main() -> Result<()> {
 
     pg_queue::logs::setup(&client).await.context("setup db")?;
 
-    let a = tokio::spawn(run_pingpong(
-        pg.clone(),
-        StdRng::from_entropy(),
-        "ping",
-        "pong",
-    ))
-    .map(|res| res?);
-    let b = tokio::spawn(run_pingpong(pg, StdRng::from_entropy(), "pong", "ping")).map(|res| res?);
+    let a = tokio::spawn(run_pingpong(pg.clone(), "ping", "pong")).map(|res| res?);
+    let b = tokio::spawn(run_pingpong(pg, "pong", "ping")).map(|res| res?);
 
     {
         let version = pg_queue::logs::produce(&mut client, b"ping", 1usize.to_string().as_bytes())
@@ -57,13 +50,17 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-#[instrument(skip(pg, rng))]
-async fn run_pingpong<R: RngCore>(pg: Config, mut rng: R, from: &str, to: &str) -> Result<()> {
-    let (mut client, conn) = pg.connect(NoTls).await.context("connect pg")?;
-    tokio::spawn(conn);
-    let jitter_dist = Uniform::from(1f64..1.5);
+#[instrument(skip(pg))]
+async fn run_pingpong(pg: Config, from: &str, to: &str) -> Result<()> {
+    let notify = Arc::new(Notify::new());
 
-    let backoff = Duration::from_millis(1000);
+    let (mut client, conn) = pg.connect(NoTls).await.context("connect pg")?;
+    let span = tracing::error_span!("connection", from = field::Empty, to = field::Empty);
+    span.record("from", &from);
+    span.record("to", &to);
+    tokio::spawn(run_connection(conn, notify.clone()).instrument(span));
+
+    client.execute("LISTEN logs", &[]).await.context("LISTEN")?;
 
     loop {
         let mut cursor = Cursor::load(&client, from).await.context("load cursor")?;
@@ -77,10 +74,9 @@ async fn run_pingpong<R: RngCore>(pg: Config, mut rng: R, from: &str, to: &str) 
                 .await
                 .context("commit")?;
         } else {
-            let jitter: f64 = jitter_dist.sample(&mut rng);
-            let pause = backoff.mul_f64(jitter);
-            debug!(?pause, "Backoff");
-            sleep(pause).await;
+            debug!("Await notification");
+            notify.notified().await;
+            debug!("Notification received");
         }
     }
 }
@@ -110,4 +106,61 @@ async fn handle_item(client: &mut Client, from: &str, to: &str, it: &Entry) -> R
     }
 
     Ok(())
+}
+
+#[instrument(skip(conn, notify))]
+async fn run_connection<S: AsyncRead + AsyncWrite + Unpin, T: AsyncRead + AsyncWrite + Unpin>(
+    conn: Connection<S, T>,
+    notify: Arc<Notify>,
+) -> Result<()> {
+    debug!("Listening for notifies on connection");
+
+    let mut notifies = NotificationStream::new(conn);
+
+    while let Some(notification) = notifies.next().await.transpose()? {
+        debug!(?notification, "Received notification");
+        notify.notify_one();
+    }
+
+    Ok(())
+}
+
+struct NotificationStream<S, T> {
+    conn: Connection<S, T>,
+}
+
+impl<S, T> NotificationStream<S, T> {
+    fn new(conn: Connection<S, T>) -> Self {
+        Self { conn }
+    }
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin, T: AsyncRead + AsyncWrite + Unpin> Stream
+    for NotificationStream<S, T>
+{
+    type Item = Result<Notification, tokio_postgres::Error>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        let maybe_message = ready!(self.conn.poll_message(cx));
+        let message = match maybe_message {
+            Some(Ok(item)) => item,
+            Some(Err(e)) => return Poll::Ready(Some(Err(e))),
+            None => return Poll::Ready(None),
+        };
+
+        match message {
+            AsyncMessage::Notice(notice) => {
+                info!(?notice, "Db notice");
+                Poll::Pending
+            }
+            AsyncMessage::Notification(notification) => Poll::Ready(Some(Ok(notification))),
+            message => {
+                trace!(?message, "Other message received");
+                Poll::Pending
+            }
+        }
+    }
 }
