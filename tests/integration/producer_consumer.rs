@@ -47,10 +47,7 @@ async fn can_produce_one() {
         .expect("wait for version");
     let it = cons.poll().await.expect("poll");
     assert_eq!(
-        it.map(|e| (
-            String::from_utf8_lossy(&e.key).to_string(),
-            String::from_utf8_lossy(&e.data).to_string()
-        )),
+        it.map(|e| (e.key.clone(), String::from_utf8_lossy(&e.data).to_string())),
         Some(("foo".to_string(), "42".to_string()))
     );
     assert_eq!(
@@ -84,10 +81,7 @@ async fn can_produce_with_metadata() {
         .expect("wait for version");
     let it = cons.poll().await.expect("poll");
     assert_eq!(
-        it.map(|e| (
-            String::from_utf8_lossy(&e.key).to_string(),
-            String::from_utf8_lossy(&e.data).to_string()
-        )),
+        it.map(|e| (e.key.clone(), String::from_utf8_lossy(&e.data).to_string())),
         Some(("foo".to_string(), "42".to_string()))
     );
     assert_eq!(
@@ -121,15 +115,15 @@ async fn can_produce_several() {
         .expect("wait for version");
     assert_eq!(
         cons.poll().await.expect("poll").map(|e| (e.key, e.data)),
-        Some((b"a".to_vec(), b"0".to_vec()))
+        Some(("a".to_string(), b"0".to_vec()))
     );
     assert_eq!(
         cons.poll().await.expect("poll").map(|e| (e.key, e.data)),
-        Some((b"b".to_vec(), b"1".to_vec()))
+        Some(("b".to_string(), b"1".to_vec()))
     );
     assert_eq!(
         cons.poll().await.expect("poll").map(|e| (e.key, e.data)),
-        Some((b"c".to_vec(), b"2".to_vec()))
+        Some(("c".to_string(), b"2".to_vec()))
     );
     assert_eq!(cons.poll().await.expect("poll").map(|e| e.data), None)
 }
@@ -1118,12 +1112,12 @@ async fn can_recover_from_transaction_id_reset_with_entries() {
     // Assume the backup had advanced to an absurdly high transaction ID.
     let backup_tx_id = 1_000_000_000_000_000_000i64;
     tx.execute(
-        "INSERT INTO logs (epoch, tx_id, id, key, body) VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO logs (epoch, tx_id, id, key_text, body) VALUES ($1, $2, $3, $4, $5)",
         &[
             &23i64,
             &(backup_tx_id + 1),
             &10i64,
-            &(b"_" as &[u8]),
+            &"_",
             &(b"first" as &[u8]),
         ],
     )
@@ -1190,12 +1184,12 @@ async fn can_recover_from_transaction_id_reset_when_committing_offsets() {
     // Assume the backup had advanced to an absurdly high transaction ID.
     let backup_tx_id = 1_000_000_000_000_000_000i64;
     tx.execute(
-        "INSERT INTO logs (epoch, tx_id, id, key, body) VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO logs (epoch, tx_id, id, key_text, body) VALUES ($1, $2, $3, $4, $5)",
         &[
             &23i64,
             &(backup_tx_id + 1),
             &10i64,
-            &(b"_" as &[u8]),
+            &"_",
             &(b"first" as &[u8]),
         ],
     )
@@ -1282,12 +1276,12 @@ async fn can_recover_from_transaction_id_reset_with_discard_upto() {
     // Assume the backup had advanced to an absurdly high transaction ID.
     let backup_tx_id = 1_000_000_000_000_000_000i64;
     tx.execute(
-        "INSERT INTO logs (epoch, tx_id, id, key, body) VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO logs (epoch, tx_id, id, key_text, body) VALUES ($1, $2, $3, $4, $5)",
         &[
             &23i64,
             &(backup_tx_id + 1),
             &10i64,
-            &(b"_" as &[u8]),
+            &"_",
             &(b"first" as &[u8]),
         ],
     )
@@ -1359,12 +1353,12 @@ async fn can_recover_from_transaction_id_reset_with_discard_consumed() {
     // Assume the backup had advanced to an absurdly high transaction ID.
     let backup_tx_id = 1_000_000_000_000_000_000i64;
     tx.execute(
-        "INSERT INTO logs (epoch, tx_id, id, key, body) VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO logs (epoch, tx_id, id, key_text, body) VALUES ($1, $2, $3, $4, $5)",
         &[
             &23i64,
             &(backup_tx_id + 1),
             &10i64,
-            &(b"_" as &[u8]),
+            &"_",
             &(b"first" as &[u8]),
         ],
     )

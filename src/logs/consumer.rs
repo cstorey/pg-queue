@@ -28,7 +28,7 @@ static DISCARD_ENTRIES: &str = "DELETE FROM logs WHERE (epoch, tx_id, id) <= ($1
 pub struct Entry {
     pub version: Version,
     pub written_at: DateTime<Utc>,
-    pub key: Vec<u8>,
+    pub key: String,
     pub meta: Option<Vec<u8>>,
     pub data: Vec<u8>,
 }

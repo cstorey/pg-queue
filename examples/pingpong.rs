@@ -107,7 +107,7 @@ async fn run_pingpong<R: RngCore>(pg: Config, mut rng: R, from: &str, to: &str) 
         let mut t = client.transaction().await?;
 
         while let Some(it) = cursor.poll(&mut t).await.context("cursor poll")? {
-            if from.as_bytes() == it.key {
+            if from == it.key {
                 handle_item(&mut t, to, &it).await.context("handle")?;
             } else {
                 debug!(version=%it.version, "Ignoring item");
@@ -158,7 +158,7 @@ async fn run_pingpong<R: RngCore>(pg: Config, mut rng: R, from: &str, to: &str) 
     skip(client,to,it),
     fields(
     version=%it.version,
-    key=?String::from_utf8_lossy(&it.key),
+    key=%it.key,
 ))]
 async fn handle_item<C: GenericClient>(client: &mut C, to: &str, it: &Entry) -> Result<()> {
     debug!("Found item");
