@@ -1,17 +1,15 @@
 use std::{collections::BTreeMap, fmt, sync::Arc, time};
 
 use chrono::{DateTime, Utc};
-use futures::StreamExt;
 use tokio::{
-    io::{AsyncRead, AsyncWrite},
     sync::Notify,
     time::{sleep, Duration},
 };
-use tokio_postgres::{self, tls::MakeTlsConnect, Client, Config, Connection, Socket};
+use tokio_postgres::{self, tls::MakeTlsConnect, Client, Config, Socket};
 use tracing::{debug, trace};
 
 use crate::{
-    connection::NotificationStream,
+    connection::notify_on_notification,
     logs::{Cursor, Error, Result, Version},
 };
 
@@ -50,7 +48,7 @@ impl Consumer {
         let (client, conn) = config.connect(tls).await?;
 
         let notify = Arc::new(Notify::new());
-        tokio::spawn(Self::run_connection(conn, notify.clone()));
+        tokio::spawn(notify_on_notification(conn, notify.clone()));
 
         listen(&client).await?;
 
@@ -67,25 +65,6 @@ impl Consumer {
         };
 
         Ok(consumer)
-    }
-
-    async fn run_connection<
-        S: AsyncRead + AsyncWrite + Unpin,
-        T: AsyncRead + AsyncWrite + Unpin,
-    >(
-        conn: Connection<S, T>,
-        notify: Arc<Notify>,
-    ) -> Result<()> {
-        debug!("Listening for notifies on connection");
-
-        let mut notifies = NotificationStream::new(conn);
-
-        while let Some(notification) = notifies.next().await.transpose()? {
-            debug!(?notification, "Received notification");
-            notify.notify_waiters();
-        }
-
-        Ok(())
     }
 
     pub async fn poll(&mut self) -> Result<Option<Entry>> {
