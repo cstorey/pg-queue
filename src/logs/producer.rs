@@ -79,7 +79,7 @@ impl<'a> Batch<'a> {
         // a client and it's transaction, we do this inside the transaction
         // and hope for the best.
         let Batch { transaction, .. } = self;
-        transaction.query(SEND_NOTIFY_SQL, &[]).await?;
+        transaction.execute(SEND_NOTIFY_SQL, &[]).await?;
         trace!("Sent notify");
         transaction.commit().await?;
         trace!("Committed");
