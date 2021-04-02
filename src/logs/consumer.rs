@@ -49,6 +49,8 @@ impl Consumer {
         let notify = Arc::new(Notify::new());
         tokio::spawn(Self::run_connection(conn, notify.clone()));
 
+        listen(&client).await?;
+
         Self::new(notify, client, name).await
     }
 
@@ -96,8 +98,6 @@ impl Consumer {
     }
 
     pub async fn wait_next(&mut self) -> Result<Entry> {
-        listen(&self.client).await?;
-
         loop {
             if let Some(entry) = self.poll_item().await? {
                 return Ok(entry);
