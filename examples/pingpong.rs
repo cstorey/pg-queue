@@ -4,7 +4,11 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use futures::{future::try_join_all, FutureExt, StreamExt};
+use futures::{
+    channel::mpsc::UnboundedSender,
+    future::{self, select, try_join_all, Either},
+    FutureExt, SinkExt, StreamExt,
+};
 use pg_queue::{
     connection::NotificationStream,
     logs::{Cursor, Entry},
@@ -17,7 +21,6 @@ use rand::{
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
-    sync::mpsc::UnboundedSender,
     time::timeout,
 };
 use tokio_postgres::{Config, Connection, GenericClient, NoTls};
@@ -25,7 +28,7 @@ use tracing::{debug, field, instrument, trace, warn, Instrument};
 use tracing_log::LogTracer;
 use tracing_subscriber::EnvFilter;
 
-const MIN_PAUSE: Duration = Duration::from_millis(1000);
+const MIN_PAUSE: Duration = Duration::from_millis(10);
 const MAX_PAUSE: Duration = Duration::from_secs(30);
 
 #[tokio::main(flavor = "current_thread")]
@@ -87,7 +90,7 @@ async fn run_pingpong<R: RngCore>(pg: Config, mut rng: R, from: &str, to: &str) 
     // We use an unbounded channel here as the same process both mediates SQL
     // commands, and feeding us notifications, so if the channel is full, and
     // we're still waiting on a response from the server, then we'll deadlock.
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
 
     let (mut client, conn) = pg.connect(NoTls).await.context("connect pg")?;
     let span = tracing::error_span!("connection", from = field::Empty, to = field::Empty);
@@ -104,7 +107,7 @@ async fn run_pingpong<R: RngCore>(pg: Config, mut rng: R, from: &str, to: &str) 
     loop {
         let mut t = client.transaction().await?;
 
-        if let Some(it) = cursor.poll(&mut t).await.context("cursor poll")? {
+        while let Some(it) = cursor.poll(&mut t).await.context("cursor poll")? {
             if from.as_bytes() == it.key {
                 handle_item(&mut t, to, &it).await.context("handle")?;
             } else {
@@ -112,33 +115,42 @@ async fn run_pingpong<R: RngCore>(pg: Config, mut rng: R, from: &str, to: &str) 
             }
 
             cursor.commit_upto(&mut t, &it).await.context("commit")?;
+        }
 
-            t.commit().await?;
-        } else {
-            // Close the transaction, as postgres will only deliver notifications
-            // that happened-before the start of the transaction (I think).
-            t.commit().await?;
+        // Close the transaction, as postgres will only deliver notifications
+        // that happened-before the start of the transaction (I think).
+        t.commit().await?;
 
-            let pause = base_pause
-                .mul_f64(jitter_factor.sample(&mut rng))
-                .min(MAX_PAUSE);
+        let pause = base_pause
+            .mul_f64(jitter_factor.sample(&mut rng))
+            .min(MAX_PAUSE);
 
-            debug!(timeout=?pause, "Await notification");
-            let started = Instant::now();
-            match timeout(base_pause, rx.recv()).await {
-                Ok(Some(notification)) => {
-                    debug!(after=?started.elapsed(), ?notification, "Notification received");
-                    base_pause = MIN_PAUSE;
-                }
-                Ok(None) => {
-                    // We should get a proper error at some point.
-                    warn!(after=?started.elapsed(), "Connection exited?");
-                }
-                Err(_) => {
-                    trace!(?pause, after=?started.elapsed(), "Not notified within timeout, retrying with backoff");
+        debug!(timeout=?pause, "Await notification");
+        let started = Instant::now();
+        match timeout(base_pause, rx.next()).await {
+            Ok(Some(notification)) => {
+                debug!(after=?started.elapsed(), ?notification, "Notification received");
+                base_pause = MIN_PAUSE;
+
+                'read_unread: loop {
+                    match select(rx.next(), future::ready(())).await {
+                        Either::Left((Some(notification), _)) => {
+                            debug!(after=?started.elapsed(), ?notification, "Another notification received");
+                        }
+                        _ => {
+                            break 'read_unread;
+                        }
+                    };
                 }
             }
-            base_pause = base_pause.mul_f64(1.5).min(MAX_PAUSE);
+            Ok(None) => {
+                // We should get a proper error at some point.
+                warn!(after=?started.elapsed(), "Connection exited?");
+            }
+            Err(_) => {
+                trace!(?pause, after=?started.elapsed(), "Not notified within timeout, retrying with backoff");
+                base_pause = base_pause.mul_f64(1.5).min(MAX_PAUSE);
+            }
         }
     }
 }
@@ -171,16 +183,16 @@ pub async fn siphon_notifications<
     T: AsyncRead + AsyncWrite + Unpin,
 >(
     conn: Connection<S, T>,
-    notify: UnboundedSender<tokio_postgres::Notification>,
+    mut tx: UnboundedSender<tokio_postgres::Notification>,
 ) -> Result<()> {
     debug!("Listening for notifies on connection");
 
     let mut notifies = NotificationStream::new(conn);
 
     while let Some(notification) = notifies.next().await.transpose()? {
-        debug!(?notification, ?notify, "Received notification");
-        notify.send(notification)?;
-        trace!(?notify, "Notified");
+        debug!(?notification, "Received notification");
+        tx.send(notification).await?;
+        trace!("Notified");
     }
 
     Ok(())
