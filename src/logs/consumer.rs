@@ -1,16 +1,19 @@
 use std::{collections::BTreeMap, fmt, sync::Arc, time};
 
 use chrono::{DateTime, Utc};
-use futures_util::stream::StreamExt;
+use futures::StreamExt;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     sync::Notify,
     time::{sleep, Duration},
 };
-use tokio_postgres::{self, tls::MakeTlsConnect, AsyncMessage, Client, Config, Connection, Socket};
-use tracing::{debug, info, trace};
+use tokio_postgres::{self, tls::MakeTlsConnect, Client, Config, Connection, Socket};
+use tracing::{debug, trace};
 
-use crate::logs::{Cursor, Error, Result, Version};
+use crate::{
+    connection::NotificationStream,
+    logs::{Cursor, Error, Result, Version},
+};
 
 static LISTEN: &str = "LISTEN logs";
 static IS_VISIBLE: &str = "\
@@ -70,20 +73,16 @@ impl Consumer {
         S: AsyncRead + AsyncWrite + Unpin,
         T: AsyncRead + AsyncWrite + Unpin,
     >(
-        mut conn: Connection<S, T>,
+        conn: Connection<S, T>,
         notify: Arc<Notify>,
     ) -> Result<()> {
         debug!("Listening for notifies on connection");
-        let mut messages = futures::stream::poll_fn(|cx| conn.poll_message(cx));
-        while let Some(item) = messages.next().await.transpose()? {
-            match item {
-                AsyncMessage::Notice(notice) => info!(?notice, "Db notice"),
-                AsyncMessage::Notification(notification) => {
-                    trace!(?notification, "Received notification");
-                    notify.notify_one();
-                }
-                message => trace!(?message, "Other message received"),
-            }
+
+        let mut notifies = NotificationStream::new(conn);
+
+        while let Some(notification) = notifies.next().await.transpose()? {
+            debug!(?notification, "Received notification");
+            notify.notify_waiters();
         }
 
         Ok(())
