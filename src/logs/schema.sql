@@ -116,3 +116,72 @@ DO $$
         END IF;
     END
 $$;
+
+-- Split
+
+ALTER TABLE logs ALTER COLUMN key SET DEFAULT NULL;
+
+-- Split
+
+CREATE OR REPLACE FUNCTION logs_text_key_migration_trigger_bytea_to_text_f()
+  RETURNS trigger
+  LANGUAGE plpgsql AS
+$func$
+BEGIN
+    -- support newer consumer for older consumers
+    NEW.key_text := convert_from(NEW.key, 'utf-8');
+    RETURN NEW;
+END
+$func$;
+
+-- Split
+
+CREATE OR REPLACE FUNCTION logs_text_key_migration_trigger_text_to_bytea_f()
+  RETURNS trigger
+  LANGUAGE plpgsql AS
+$func$
+BEGIN
+    -- support newer consumers for older producers
+    NEW.key := convert_to(NEW.key_text, 'utf-8');
+    RETURN NEW;
+END
+$func$;
+
+-- Split
+
+DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT true FROM pg_attribute
+            WHERE attrelid = 'logs'::regclass
+            AND attname = 'key_text'
+            AND NOT attisdropped
+        ) THEN
+            ALTER TABLE logs ADD COLUMN key_text TEXT;
+            UPDATE logs SET key_text = convert_from(key, 'utf-8') WHERE key_text IS NULL;
+            ALTER TABLE logs ALTER COLUMN key_text SET NOT NULL;
+        END IF;
+    END
+$$;
+
+-- Split
+
+BEGIN;
+DROP TRIGGER IF EXISTS logs_text_key_migration_trigger_text_to_bytea ON logs;
+CREATE TRIGGER logs_text_key_migration_trigger_text_to_bytea
+BEFORE INSERT ON logs
+FOR EACH ROW
+WHEN (NEW.key_text IS NOT NULL AND NEW.key IS NOT NULL)
+EXECUTE PROCEDURE logs_text_key_migration_trigger_text_to_bytea_f();
+COMMIT;
+
+-- Split
+
+BEGIN;
+DROP TRIGGER IF EXISTS logs_text_key_migration_trigger_bytea_to_text ON logs;
+CREATE TRIGGER logs_text_key_migration_trigger_bytea_to_text
+BEFORE INSERT ON logs
+FOR EACH ROW
+WHEN (NEW.key_text IS NULL OR NEW.key IS NOT NULL)
+EXECUTE PROCEDURE logs_text_key_migration_trigger_bytea_to_text_f();
+COMMIT;
