@@ -73,10 +73,9 @@ async fn main() -> Result<()> {
 
     {
         let key = instances.get(0).expect("first item");
-        let version =
-            pg_queue::logs::produce(&mut client, key.as_bytes(), 1usize.to_string().as_bytes())
-                .await
-                .context("produce")?;
+        let version = pg_queue::logs::produce(&mut client, key, 1usize.to_string().as_bytes())
+            .await
+            .context("produce")?;
         debug!(?version, ?key, "Produced seed");
     }
 
@@ -108,7 +107,7 @@ async fn run_pingpong<R: RngCore>(pg: Config, mut rng: R, from: &str, to: &str) 
         let mut t = client.transaction().await?;
 
         while let Some(it) = cursor.poll(&mut t).await.context("cursor poll")? {
-            if from.as_bytes() == it.key {
+            if from == it.key {
                 handle_item(&mut t, to, &it).await.context("handle")?;
             } else {
                 debug!(version=%it.version, "Ignoring item");
@@ -159,7 +158,7 @@ async fn run_pingpong<R: RngCore>(pg: Config, mut rng: R, from: &str, to: &str) 
     skip(client,to,it),
     fields(
     version=%it.version,
-    key=?String::from_utf8_lossy(&it.key),
+    key=%it.key,
 ))]
 async fn handle_item<C: GenericClient>(client: &mut C, to: &str, it: &Entry) -> Result<()> {
     debug!("Found item");
@@ -170,7 +169,7 @@ async fn handle_item<C: GenericClient>(client: &mut C, to: &str, it: &Entry) -> 
 
     let next = num + 1;
 
-    let version = pg_queue::logs::produce(client, to.as_bytes(), next.to_string().as_bytes())
+    let version = pg_queue::logs::produce(client, to, next.to_string().as_bytes())
         .await
         .context("produce")?;
     debug!(%version, "Produced");

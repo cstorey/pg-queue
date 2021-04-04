@@ -16,9 +16,7 @@ async fn example_over_connection() -> Result<()> {
 
     let mut pg = connect(&pg_config).await.context("connect")?;
 
-    let produced_version = produce(&mut pg, b"test", b"test")
-        .await
-        .context("produce")?;
+    let produced_version = produce(&mut pg, "test", b"test").await.context("produce")?;
 
     wait_until_visible(&pg, produced_version, Duration::from_secs(1))
         .await
@@ -44,7 +42,7 @@ async fn example_over_transaction() -> Result<()> {
 
     let mut t = pg.transaction().await.context("BEGIN")?;
 
-    let produced_version = produce(&mut t, b"test", b"test").await.context("produce")?;
+    let produced_version = produce(&mut t, "test", b"test").await.context("produce")?;
     t.commit().await?;
 
     wait_until_visible(&pg, produced_version, Duration::from_secs(1)).await?;
@@ -76,7 +74,7 @@ async fn example_consuming_in_chunks() -> Result<()> {
     let b = Batch::begin(&mut t).await.context("batch start")?;
 
     for i in 0usize..16 {
-        produced.push(b.produce(b"test", i.to_string().as_bytes()).await?);
+        produced.push(b.produce("test", i.to_string().as_bytes()).await?);
     }
 
     b.commit().await.context("finish batch")?;

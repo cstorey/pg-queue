@@ -53,7 +53,7 @@ pub enum Error {
 
 pub async fn setup(conn: &Client) -> Result<()> {
     debug!("Running setup SQL");
-    for chunk in CREATE_TABLE_SQL.split("\n\n") {
+    for chunk in CREATE_TABLE_SQL.split("-- Split\n") {
         conn.batch_execute(chunk.trim()).await?;
     }
     debug!("Ran setup SQL ok");

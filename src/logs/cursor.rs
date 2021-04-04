@@ -22,7 +22,7 @@ static FETCH_NEXT_ROW: &str = "\
         ORDER BY l.epoch desc
         LIMIT 1
     )
-     SELECT l.epoch, l.tx_id as tx_position, l.id as position, l.key, l.meta, l.body, l.written_at
+     SELECT l.epoch, l.tx_id as tx_position, l.id as position, l.key_text, l.meta, l.body, l.written_at
      FROM logs as l, head as h
      WHERE (l.epoch, l.tx_id, l.id) > ($1, $2, $3)
      AND (l.epoch, l.tx_id) < (h.epoch, txid_snapshot_xmin(txid_current_snapshot()))
@@ -77,7 +77,7 @@ impl Cursor {
         trace!(rows=?rows.len(), after=%self.last_seen_offset, "next rows");
         for r in rows.into_iter() {
             let version = Version::from_row(&r);
-            let key: Vec<u8> = r.get("key");
+            let key: String = r.get("key_text");
             let meta: Option<Vec<u8>> = r.get("meta");
             let data: Vec<u8> = r.get("body");
             let written_at = r.get("written_at");
