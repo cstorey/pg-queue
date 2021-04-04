@@ -1,16 +1,17 @@
 use std::{collections::BTreeMap, fmt, sync::Arc, time};
 
 use chrono::{DateTime, Utc};
-use futures_util::stream::StreamExt;
 use tokio::{
-    io::{AsyncRead, AsyncWrite},
     sync::Notify,
     time::{sleep, Duration},
 };
-use tokio_postgres::{self, tls::MakeTlsConnect, AsyncMessage, Client, Config, Connection, Socket};
-use tracing::{debug, info, trace};
+use tokio_postgres::{self, tls::MakeTlsConnect, Client, Config, Socket};
+use tracing::{debug, trace};
 
-use crate::logs::{Cursor, Error, Result, Version};
+use crate::{
+    connection::notify_on_notification,
+    logs::{Cursor, Error, Result, Version},
+};
 
 static LISTEN: &str = "LISTEN logs";
 static IS_VISIBLE: &str = "\
@@ -21,7 +22,7 @@ static IS_VISIBLE: &str = "\
         SELECT $1 < xmin as lt_xmin, xmin, current FROM snapshot";
 static LIST_CONSUMERS: &str =
     "SELECT name, epoch, tx_position, position FROM log_consumer_positions";
-static DISCARD_ENTRIES: &str = "DELETE FROM logs WHERE (tx_id, id) <= ($1, $2)";
+static DISCARD_ENTRIES: &str = "DELETE FROM logs WHERE (epoch, tx_id, id) <= ($1, $2, $3)";
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Entry {
@@ -47,7 +48,9 @@ impl Consumer {
         let (client, conn) = config.connect(tls).await?;
 
         let notify = Arc::new(Notify::new());
-        tokio::spawn(Self::run_connection(conn, notify.clone()));
+        tokio::spawn(notify_on_notification(conn, notify.clone()));
+
+        listen(&client).await?;
 
         Self::new(notify, client, name).await
     }
@@ -64,29 +67,6 @@ impl Consumer {
         Ok(consumer)
     }
 
-    async fn run_connection<
-        S: AsyncRead + AsyncWrite + Unpin,
-        T: AsyncRead + AsyncWrite + Unpin,
-    >(
-        mut conn: Connection<S, T>,
-        notify: Arc<Notify>,
-    ) -> Result<()> {
-        debug!("Listening for notifies on connection");
-        let mut messages = futures::stream::poll_fn(|cx| conn.poll_message(cx));
-        while let Some(item) = messages.next().await.transpose()? {
-            match item {
-                AsyncMessage::Notice(notice) => info!(?notice, "Db notice"),
-                AsyncMessage::Notification(notification) => {
-                    trace!(?notification, "Received notification");
-                    notify.notify_one();
-                }
-                message => trace!(?message, "Other message received"),
-            }
-        }
-
-        Ok(())
-    }
-
     pub async fn poll(&mut self) -> Result<Option<Entry>> {
         self.poll_item().await
     }
@@ -96,7 +76,6 @@ impl Consumer {
     }
 
     pub async fn wait_next(&mut self) -> Result<Entry> {
-        self.client.execute(LISTEN, &[]).await?;
         loop {
             if let Some(entry) = self.poll_item().await? {
                 return Ok(entry);
@@ -119,20 +98,18 @@ impl Consumer {
     }
 
     pub async fn discard_upto(&mut self, limit: Version) -> Result<()> {
-        let t = self.client.transaction().await?;
-        t.execute(DISCARD_ENTRIES, &[&limit.tx_id, &limit.seq])
+        debug!(?limit, "Discarding entries upto");
+        self.client
+            .execute(DISCARD_ENTRIES, &[&limit.epoch, &limit.tx_id, &limit.seq])
             .await?;
-        t.commit().await?;
         Ok(())
     }
 
     pub async fn discard_consumed(&mut self) -> Result<()> {
-        let t = self.client.transaction().await?;
-        let rows = t.query(LIST_CONSUMERS, &[]).await?;
+        let rows = self.client.query(LIST_CONSUMERS, &[]).await?;
         if let Some(min_version) = rows.into_iter().map(|r| Version::from_row(&r)).min() {
-            t.execute(DISCARD_ENTRIES, &[&min_version.tx_id, &min_version.seq])
-                .await?;
-            t.commit().await?;
+            debug!(?min_version, "Discarding consumed upto");
+            self.discard_upto(min_version).await?;
         }
         Ok(())
     }
@@ -196,6 +173,11 @@ pub async fn wait_until_visible(
         sleep(pause).await;
     }
 
+    Ok(())
+}
+
+pub async fn listen(client: &Client) -> Result<()> {
+    client.execute(LISTEN, &[]).await?;
     Ok(())
 }
 

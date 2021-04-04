@@ -1,3 +1,5 @@
+use std::fmt;
+
 use thiserror::Error;
 use tokio_postgres::{self, Client, GenericClient};
 use tracing::debug;
@@ -73,5 +75,11 @@ impl Version {
             tx_id: row.get("tx_position"),
             seq: row.get("position"),
         }
+    }
+}
+
+impl fmt::Display for Version {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "E{}T{}S{}", self.epoch, self.tx_id, self.seq)
     }
 }

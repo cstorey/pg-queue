@@ -1,7 +1,7 @@
 use std::{collections::VecDeque, fmt};
 
 use tokio_postgres::{Client, GenericClient};
-use tracing::trace;
+use tracing::{debug, trace};
 
 use crate::logs::{Entry, Result, Version};
 
@@ -32,7 +32,7 @@ static UPSERT_CONSUMER_OFFSET: &str = "\
      INSERT INTO log_consumer_positions (name, epoch, tx_position, position) \
      values ($1, $2, $3, $4) \
      ON CONFLICT (name) DO \
-     UPDATE SET tx_position = EXCLUDED.tx_position, position = EXCLUDED.position";
+     UPDATE SET epoch = EXCLUDED.epoch, tx_position = EXCLUDED.tx_position, position = EXCLUDED.position";
 static DISCARD_CONSUMER: &str = "DELETE FROM log_consumer_positions WHERE name = $1";
 
 const LIMIT_BUFFER: i64 = 1024;
@@ -46,6 +46,7 @@ pub struct Cursor {
 impl Cursor {
     pub async fn load<C: GenericClient>(client: &C, name: &str) -> Result<Self> {
         let position = Self::fetch_consumer_pos(client, name).await?;
+        debug!(?name, ?position, "Loaded offset");
         let consumer = Cursor {
             name: name.to_string(),
             last_seen_offset: position,
@@ -73,7 +74,7 @@ impl Cursor {
                 ],
             )
             .await?;
-        trace!(rows=?rows.len(), "next rows");
+        trace!(rows=?rows.len(), after=%self.last_seen_offset, "next rows");
         for r in rows.into_iter() {
             let version = Version::from_row(&r);
             let key: Vec<u8> = r.get("key");
