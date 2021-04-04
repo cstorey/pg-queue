@@ -185,3 +185,20 @@ FOR EACH ROW
 WHEN (NEW.key_text IS NULL AND NEW.key IS NOT NULL)
 EXECUTE PROCEDURE logs_text_key_migration_trigger_bytea_to_text_f();
 COMMIT;
+
+-- Split
+
+DO $$
+    BEGIN
+        IF EXISTS (
+            SELECT true FROM pg_attribute
+            WHERE attrelid = 'logs'::regclass
+            AND attname = 'key'
+            AND NOT attisdropped
+        ) THEN
+            DROP TRIGGER IF EXISTS logs_text_key_migration_trigger_text_to_bytea ON logs;
+            DROP TRIGGER IF EXISTS logs_text_key_migration_trigger_bytea_to_text ON logs;
+            ALTER TABLE logs DROP COLUMN key;
+        END IF;
+    END
+$$;
