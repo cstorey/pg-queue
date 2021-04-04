@@ -40,7 +40,7 @@ async fn can_produce_one() {
 
     let mut client = connect(&pg_config).await.expect("connect");
 
-    let v = produce(&mut client, b"foo", b"42").await.expect("produce");
+    let v = produce(&mut client, "foo", b"42").await.expect("produce");
 
     cons.wait_until_visible(v, time::Duration::from_secs(1))
         .await
@@ -75,7 +75,7 @@ async fn can_produce_with_metadata() {
 
     let mut client = connect(&pg_config).await.expect("connect");
 
-    let v = produce_meta(&mut client, b"foo", Some(b"42-meta".as_ref()), b"42")
+    let v = produce_meta(&mut client, "foo", Some(b"42-meta".as_ref()), b"42")
         .await
         .expect("produce");
 
@@ -112,9 +112,9 @@ async fn can_produce_several() {
 
     let mut client = connect(&pg_config).await.expect("connect");
 
-    produce(&mut client, b"a", b"0").await.expect("produce");
-    produce(&mut client, b"b", b"1").await.expect("produce");
-    let v = produce(&mut client, b"c", b"2").await.expect("produce");
+    produce(&mut client, "a", b"0").await.expect("produce");
+    produce(&mut client, "b", b"1").await.expect("produce");
+    let v = produce(&mut client, "c", b"2").await.expect("produce");
 
     cons.wait_until_visible(v, time::Duration::from_secs(1))
         .await
@@ -143,9 +143,9 @@ async fn can_produce_ordered() {
 
     let mut client = connect(&pg_config).await.expect("connect");
 
-    let v0 = produce(&mut client, b"a", b"0").await.expect("produce");
-    let v1 = produce(&mut client, b"a", b"1").await.expect("produce");
-    let v2 = produce(&mut client, b"a", b"2").await.expect("produce");
+    let v0 = produce(&mut client, "a", b"0").await.expect("produce");
+    let v1 = produce(&mut client, "a", b"1").await.expect("produce");
+    let v2 = produce(&mut client, "a", b"2").await.expect("produce");
 
     assert!(v0 < v1, "{:?} < {:?}", v0, v1);
     assert!(v1 < v2, "{:?} < {:?}", v1, v2);
@@ -166,9 +166,9 @@ async fn can_produce_in_batches() {
 
     let v = {
         let batch = Batch::begin(&mut client).await.expect("batch");
-        batch.produce(b"a", b"0").await.expect("produce");
-        batch.produce(b"a", b"1").await.expect("produce");
-        let v = batch.produce(b"a", b"2").await.expect("produce");
+        batch.produce("a", b"0").await.expect("produce");
+        batch.produce("a", b"1").await.expect("produce");
+        let v = batch.produce("a", b"2").await.expect("produce");
         batch.commit().await.expect("commit");
         v
     };
@@ -207,7 +207,7 @@ async fn can_produce_in_batches_with_metadata() {
     let v = {
         let batch = Batch::begin(&mut client).await.expect("batch");
         let v = batch
-            .produce_meta(b"a", Some(b"one-meta".as_ref()), b"one")
+            .produce_meta("a", Some(b"one-meta".as_ref()), b"one")
             .await
             .expect("produce");
         batch.commit().await.expect("commit");
@@ -237,9 +237,9 @@ async fn can_rollback_batches() {
 
     let v = {
         let batch = Batch::begin(&mut client).await.expect("batch");
-        batch.produce(b"a", b"0").await.expect("produce");
-        batch.produce(b"a", b"1").await.expect("produce");
-        let v = batch.produce(b"key", b"2").await.expect("produce");
+        batch.produce("a", b"0").await.expect("produce");
+        batch.produce("a", b"1").await.expect("produce");
+        let v = batch.produce("key", b"2").await.expect("produce");
         batch.rollback().await.expect("rollback");
         v
     };
@@ -259,9 +259,9 @@ async fn can_produce_incrementally() {
 
     let mut client = connect(&pg_config).await.expect("connect");
 
-    produce(&mut client, b"a", b"0").await.expect("produce");
-    produce(&mut client, b"a", b"1").await.expect("produce");
-    let v = produce(&mut client, b"a", b"2").await.expect("produce");
+    produce(&mut client, "a", b"0").await.expect("produce");
+    produce(&mut client, "a", b"1").await.expect("produce");
+    let v = produce(&mut client, "a", b"2").await.expect("produce");
 
     let mut cons = Consumer::connect(&pg_config, NoTls, "default")
         .await
@@ -287,11 +287,11 @@ async fn can_consume_incrementally() {
 
     let mut client = connect(&pg_config).await.expect("connect");
 
-    produce(&mut client, b"key", b"0").await.expect("produce");
-    produce(&mut client, b"key", b"1").await.expect("produce");
-    produce(&mut client, b"key", b"2").await.expect("produce");
-    produce(&mut client, b"key", b"3").await.expect("produce");
-    let v = produce(&mut client, b"key", b"4").await.expect("produce");
+    produce(&mut client, "key", b"0").await.expect("produce");
+    produce(&mut client, "key", b"1").await.expect("produce");
+    produce(&mut client, "key", b"2").await.expect("produce");
+    produce(&mut client, "key", b"3").await.expect("produce");
+    let v = produce(&mut client, "key", b"4").await.expect("produce");
 
     let mut observations = Vec::new();
     let expected = &["0", "1", "2", "3", "4"];
@@ -324,9 +324,9 @@ async fn can_restart_consume_at_commit_point() {
     setup_db(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
-    produce(&mut client, b"key", b"0").await.expect("produce");
-    produce(&mut client, b"key", b"1").await.expect("produce");
-    let v = produce(&mut client, b"key", b"2").await.expect("produce");
+    produce(&mut client, "key", b"0").await.expect("produce");
+    produce(&mut client, "key", b"1").await.expect("produce");
+    let v = produce(&mut client, "key", b"2").await.expect("produce");
 
     {
         let mut cons = Consumer::connect(&pg_config, NoTls, "default")
@@ -367,9 +367,9 @@ async fn can_progress_without_commit() {
 
     let mut client = connect(&pg_config).await.expect("connect");
 
-    produce(&mut client, b"key", b"0").await.expect("produce");
-    produce(&mut client, b"key", b"1").await.expect("produce");
-    let v = produce(&mut client, b"key", b"2").await.expect("produce");
+    produce(&mut client, "key", b"0").await.expect("produce");
+    produce(&mut client, "key", b"1").await.expect("produce");
+    let v = produce(&mut client, "key", b"2").await.expect("produce");
 
     {
         let mut cons = Consumer::connect(&pg_config, NoTls, "default")
@@ -394,8 +394,8 @@ async fn can_consume_multiply() {
 
     let mut client = connect(&pg_config).await.expect("connect");
 
-    produce(&mut client, b"key", b"0").await.expect("produce");
-    let v = produce(&mut client, b"key", b"1").await.expect("produce");
+    produce(&mut client, "key", b"0").await.expect("produce");
+    let v = produce(&mut client, "key", b"1").await.expect("produce");
 
     {
         let mut cons = Consumer::connect(&pg_config, NoTls, "one")
@@ -446,13 +446,13 @@ async fn producing_concurrently_should_never_leave_holes() {
     let mut client1 = connect(&pg_config).await.expect("connect");
 
     let b1 = Batch::begin(&mut client1).await.expect("batch b1");
-    let v = b1.produce(b"key", b"first").await.expect("produce 1");
+    let v = b1.produce("key", b"first").await.expect("produce 1");
 
     {
         let mut client2 = connect(&pg_config).await.expect("connect");
 
         let b2 = Batch::begin(&mut client2).await.expect("batch b2");
-        b2.produce(b"key", b"second").await.expect("produce 2");
+        b2.produce("key", b"second").await.expect("produce 2");
         b2.commit().await.expect("commit b1");
     }
 
@@ -508,8 +508,8 @@ async fn can_list_zero_consumer_offsets() {
 
     let mut client = connect(&pg_config).await.expect("connect");
 
-    produce(&mut client, b"key", b"0").await.expect("produce");
-    produce(&mut client, b"key", b"1").await.expect("produce");
+    produce(&mut client, "key", b"0").await.expect("produce");
+    produce(&mut client, "key", b"1").await.expect("produce");
 
     let mut client = connect(&pg_config).await.expect("connect");
 
@@ -525,8 +525,8 @@ async fn can_list_consumer_offset() {
     setup_db(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
-    produce(&mut client, b"key", b"0").await.expect("produce");
-    let v = produce(&mut client, b"key", b"1").await.expect("produce");
+    produce(&mut client, "key", b"0").await.expect("produce");
+    let v = produce(&mut client, "key", b"1").await.expect("produce");
 
     let entry;
     {
@@ -554,8 +554,8 @@ async fn can_list_consumer_offsets() {
     setup_db(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
-    produce(&mut client, b"key", b"0").await.expect("produce");
-    let v = produce(&mut client, b"key", b"1").await.expect("produce");
+    produce(&mut client, "key", b"0").await.expect("produce");
+    let v = produce(&mut client, "key", b"1").await.expect("produce");
 
     let one = {
         let mut cons = Consumer::connect(&pg_config, NoTls, "one")
@@ -596,8 +596,8 @@ async fn can_discard_entries() {
     setup_db(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
-    produce(&mut client, b"key", b"0").await.expect("produce");
-    let v = produce(&mut client, b"key", b"1").await.expect("produce");
+    produce(&mut client, "key", b"0").await.expect("produce");
+    let v = produce(&mut client, "key", b"1").await.expect("produce");
 
     {
         let mut cons = Consumer::connect(&pg_config, NoTls, "one")
@@ -650,8 +650,8 @@ async fn can_discard_consumed() {
     setup_db(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
-    produce(&mut client, b"key", b"0").await.expect("produce");
-    let v = produce(&mut client, b"key", b"1").await.expect("produce");
+    produce(&mut client, "key", b"0").await.expect("produce");
+    let v = produce(&mut client, "key", b"1").await.expect("produce");
 
     {
         let mut cons = Consumer::connect(&pg_config, NoTls, "one")
@@ -701,7 +701,7 @@ async fn can_discard_after_written() {
     setup_db(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
-    let v = produce(&mut client, b"key", b"0").await.expect("produce");
+    let v = produce(&mut client, "key", b"0").await.expect("produce");
     let mut cons = Consumer::connect(&pg_config, NoTls, "cleaner")
         .await
         .expect("consumer");
@@ -721,9 +721,9 @@ async fn can_discard_consumed_without_losing_entries() {
     setup_db(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
-    let _ = produce(&mut client, b"key", b"0").await.expect("produce");
-    let v1 = produce(&mut client, b"key", b"1").await.expect("produce");
-    let v2 = produce(&mut client, b"key", b"2").await.expect("produce");
+    let _ = produce(&mut client, "key", b"0").await.expect("produce");
+    let v1 = produce(&mut client, "key", b"1").await.expect("produce");
+    let v2 = produce(&mut client, "key", b"2").await.expect("produce");
 
     {
         let mut cons = Consumer::connect(&pg_config, NoTls, "one")
@@ -779,9 +779,9 @@ async fn can_remove_consumer_offset() {
     setup_db(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
-    produce(&mut client, b"key", b"0").await.expect("produce");
-    produce(&mut client, b"key", b"1").await.expect("produce");
-    let v = produce(&mut client, b"key", b"2").await.expect("produce");
+    produce(&mut client, "key", b"0").await.expect("produce");
+    produce(&mut client, "key", b"1").await.expect("produce");
+    let v = produce(&mut client, "key", b"2").await.expect("produce");
 
     {
         let mut cons = Consumer::connect(&pg_config, NoTls, "default")
@@ -817,9 +817,9 @@ async fn removing_non_consumer_is_noop() {
     setup_db(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
-    produce(&mut client, b"key", b"0").await.expect("produce");
-    produce(&mut client, b"key", b"1").await.expect("produce");
-    let v = produce(&mut client, b"key", b"2").await.expect("produce");
+    produce(&mut client, "key", b"0").await.expect("produce");
+    produce(&mut client, "key", b"1").await.expect("produce");
+    let v = produce(&mut client, "key", b"2").await.expect("produce");
 
     {
         let mut cons = Consumer::connect(&pg_config, NoTls, "default")
@@ -862,7 +862,7 @@ async fn can_produce_consume_with_wait() {
     thread::sleep(time::Duration::from_millis(5));
     debug!("Producing");
     let mut client = connect(&pg_config).await.expect("connect");
-    produce(&mut client, b"key", b"42").await.expect("produce");
+    produce(&mut client, "key", b"42").await.expect("produce");
 
     assert_eq!(
         waiter
@@ -885,7 +885,7 @@ async fn can_read_timestamp() {
         .expect("consumer");
 
     let mut client = connect(&pg_config).await.expect("connect");
-    let v = produce(&mut client, b"foo", b"42").await.expect("produce");
+    let v = produce(&mut client, "foo", b"42").await.expect("produce");
 
     cons.wait_until_visible(v, time::Duration::from_secs(1))
         .await
@@ -928,7 +928,7 @@ async fn can_batch_produce_pipelined() {
     let versions = stream::iter(items.iter())
         .map(|it| {
             batch
-                .produce(b"test", it.as_bytes())
+                .produce("test", it.as_bytes())
                 .inspect(move |res| println!("Produced From: {:?} → {:?}", it, res))
         })
         .buffered(nitems)
@@ -968,10 +968,10 @@ async fn can_batch_produce_with_transaction_then_insert_order() {
     let batch1 = Batch::begin(&mut client1).await.expect("batch");
     let batch2 = Batch::begin(&mut client2).await.expect("batch");
 
-    batch1.produce(b"a", b"a-1").await.expect("produce");
-    batch2.produce(b"b", b"b-1").await.expect("produce");
-    let v1 = batch1.produce(b"a", b"a-2").await.expect("produce");
-    let v2 = batch2.produce(b"b", b"b-2").await.expect("produce");
+    batch1.produce("a", b"a-1").await.expect("produce");
+    batch2.produce("b", b"b-1").await.expect("produce");
+    let v1 = batch1.produce("a", b"a-2").await.expect("produce");
+    let v2 = batch2.produce("b", b"b-2").await.expect("produce");
 
     batch1.commit().await.expect("commit");
     batch2.commit().await.expect("commit");
@@ -1023,7 +1023,7 @@ async fn can_recover_from_restore_without_without_resetting_epoch() {
 
     info!("Append new entries");
     let batch = Batch::begin(&mut client).await.expect("batch start");
-    let ver = batch.produce(b"_", b"second").await.expect("produce");
+    let ver = batch.produce("_", b"second").await.expect("produce");
     batch.commit().await.expect("commit");
     debug!("appended: {:?}", ver);
 
@@ -1078,7 +1078,7 @@ async fn can_recover_from_transaction_id_reset_with_only_consumers() {
 
     info!("Append new entries");
     let batch = Batch::begin(&mut client).await.expect("batch start");
-    let ver = batch.produce(b"_", b"second").await.expect("produce");
+    let ver = batch.produce("_", b"second").await.expect("produce");
     batch.commit().await.expect("commit");
     debug!("appended: {:?}", ver);
 
@@ -1139,7 +1139,7 @@ async fn can_recover_from_transaction_id_reset_with_entries() {
 
     info!("Append new entries");
     let batch = Batch::begin(&mut client).await.expect("batch start");
-    let ver = batch.produce(b"_", b"second").await.expect("produce");
+    let ver = batch.produce("_", b"second").await.expect("produce");
     batch.commit().await.expect("commit");
     debug!("appended: {:?}", ver);
 
@@ -1211,9 +1211,9 @@ async fn can_recover_from_transaction_id_reset_when_committing_offsets() {
 
     info!("Append new entries");
     let batch = Batch::begin(&mut client).await.expect("batch start");
-    let second = batch.produce(b"_", b"second").await.expect("produce");
+    let second = batch.produce("_", b"second").await.expect("produce");
     debug!("second: {:?}", second);
-    let third = batch.produce(b"_", b"third").await.expect("produce");
+    let third = batch.produce("_", b"third").await.expect("produce");
     debug!("third: {:?}", third);
     batch.commit().await.expect("commit");
 
@@ -1303,9 +1303,9 @@ async fn can_recover_from_transaction_id_reset_with_discard_upto() {
 
     info!("Append new entries");
     let batch = Batch::begin(&mut client).await.expect("batch start");
-    let second = batch.produce(b"_", b"second").await.expect("produce");
+    let second = batch.produce("_", b"second").await.expect("produce");
     debug!("second: {:?}", second);
-    let third = batch.produce(b"_", b"third").await.expect("produce");
+    let third = batch.produce("_", b"third").await.expect("produce");
     debug!("third: {:?}", third);
     batch.commit().await.expect("commit");
 
@@ -1380,9 +1380,9 @@ async fn can_recover_from_transaction_id_reset_with_discard_consumed() {
 
     info!("Append new entries");
     let batch = Batch::begin(&mut client).await.expect("batch start");
-    let second = batch.produce(b"_", b"second").await.expect("produce");
+    let second = batch.produce("_", b"second").await.expect("produce");
     debug!("second: {:?}", second);
-    let third = batch.produce(b"_", b"third").await.expect("produce");
+    let third = batch.produce("_", b"third").await.expect("produce");
     debug!("third: {:?}", third);
     batch.commit().await.expect("commit");
 

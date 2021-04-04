@@ -73,10 +73,9 @@ async fn main() -> Result<()> {
 
     {
         let key = instances.get(0).expect("first item");
-        let version =
-            pg_queue::logs::produce(&mut client, key.as_bytes(), 1usize.to_string().as_bytes())
-                .await
-                .context("produce")?;
+        let version = pg_queue::logs::produce(&mut client, key, 1usize.to_string().as_bytes())
+            .await
+            .context("produce")?;
         debug!(?version, ?key, "Produced seed");
     }
 
@@ -170,7 +169,7 @@ async fn handle_item<C: GenericClient>(client: &mut C, to: &str, it: &Entry) -> 
 
     let next = num + 1;
 
-    let version = pg_queue::logs::produce(client, to.as_bytes(), next.to_string().as_bytes())
+    let version = pg_queue::logs::produce(client, to, next.to_string().as_bytes())
         .await
         .context("produce")?;
     debug!(%version, "Produced");

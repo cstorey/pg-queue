@@ -27,7 +27,7 @@ pub(crate) fn consume(c: &mut Criterion) {
 
                 for i in 0..nitems {
                     let b = format!("{}", i);
-                    ver = Some(batch.produce(b"a", b.as_bytes()).await.expect("produce"));
+                    ver = Some(batch.produce("a", b.as_bytes()).await.expect("produce"));
                 }
 
                 batch.commit().await.expect("commit");

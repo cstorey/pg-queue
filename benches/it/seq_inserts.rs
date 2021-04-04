@@ -24,7 +24,7 @@ pub(crate) fn batch_seq_insert(c: &mut Criterion) {
                         let batch = Batch::begin(client).await.expect("batch");
 
                         for b in bodies.iter() {
-                            batch.produce(b"a", b.as_bytes()).await.expect("produce");
+                            batch.produce("a", b.as_bytes()).await.expect("produce");
                         }
 
                         batch.commit().await.expect("commit");

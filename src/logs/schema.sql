@@ -171,7 +171,7 @@ DROP TRIGGER IF EXISTS logs_text_key_migration_trigger_text_to_bytea ON logs;
 CREATE TRIGGER logs_text_key_migration_trigger_text_to_bytea
 BEFORE INSERT ON logs
 FOR EACH ROW
-WHEN (NEW.key_text IS NOT NULL AND NEW.key IS NOT NULL)
+WHEN (NEW.key_text IS NOT NULL AND NEW.key IS NULL)
 EXECUTE PROCEDURE logs_text_key_migration_trigger_text_to_bytea_f();
 COMMIT;
 
@@ -182,6 +182,6 @@ DROP TRIGGER IF EXISTS logs_text_key_migration_trigger_bytea_to_text ON logs;
 CREATE TRIGGER logs_text_key_migration_trigger_bytea_to_text
 BEFORE INSERT ON logs
 FOR EACH ROW
-WHEN (NEW.key_text IS NULL OR NEW.key IS NOT NULL)
+WHEN (NEW.key_text IS NULL AND NEW.key IS NOT NULL)
 EXECUTE PROCEDURE logs_text_key_migration_trigger_bytea_to_text_f();
 COMMIT;

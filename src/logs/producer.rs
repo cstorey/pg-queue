@@ -6,7 +6,7 @@ use tracing::trace;
 use crate::logs::{current_epoch, Error, Result, Version};
 
 static INSERT_ROW_SQL: &str =
-    "INSERT INTO logs (epoch, key, meta, body) values($1, $2, $3, $4) RETURNING epoch, tx_id as tx_position, id as position";
+    "INSERT INTO logs (epoch, key_text, meta, body) values($1, $2, $3, $4) RETURNING epoch, tx_id as tx_position, id as position";
 static SEND_NOTIFY_SQL: &str = "SELECT pg_notify('logs', $1)";
 
 pub struct Batch<'a> {
@@ -16,7 +16,7 @@ pub struct Batch<'a> {
     epoch: i64,
 }
 
-pub async fn produce<C: GenericClient>(client: &mut C, key: &[u8], body: &[u8]) -> Result<Version> {
+pub async fn produce<C: GenericClient>(client: &mut C, key: &str, body: &[u8]) -> Result<Version> {
     let batch = Batch::begin(client).await?;
     let version = batch.produce(key, body).await?;
     batch.commit().await?;
@@ -25,7 +25,7 @@ pub async fn produce<C: GenericClient>(client: &mut C, key: &[u8], body: &[u8]) 
 
 pub async fn produce_meta(
     client: &mut Client,
-    key: &[u8],
+    key: &str,
     meta: Option<&[u8]>,
     body: &[u8],
 ) -> Result<Version> {
@@ -50,13 +50,13 @@ impl<'a> Batch<'a> {
         Ok(batch)
     }
 
-    pub async fn produce(&self, key: &[u8], body: &[u8]) -> Result<Version> {
+    pub async fn produce(&self, key: &str, body: &[u8]) -> Result<Version> {
         self.produce_meta(key, None, body).await
     }
 
     pub async fn produce_meta(
         &self,
-        key: &[u8],
+        key: &str,
         meta: Option<&[u8]>,
         body: &[u8],
     ) -> Result<Version> {

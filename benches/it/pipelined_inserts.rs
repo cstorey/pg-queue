@@ -28,7 +28,7 @@ pub(crate) fn batch_pipeline_insert(c: &mut Criterion) {
                         let batch = Batch::begin(client).await.expect("batch");
 
                         stream::iter(bodies.iter())
-                            .map(|it| batch.produce(b"test", it.as_bytes()))
+                            .map(|it| batch.produce("test", it.as_bytes()))
                             .buffered((nitems + 1).try_into().unwrap())
                             .try_for_each(|v| async move {
                                 black_box(v);
