@@ -1,7 +1,7 @@
 use std::fmt;
 
 use bytes::Bytes;
-use tokio_postgres::{Row, Transaction};
+use tokio_postgres::{types::FromSql, Transaction};
 
 use crate::jobs::Result;
 
@@ -27,7 +27,7 @@ pub async fn consume_one(t: &Transaction<'_>) -> Result<Option<Job>> {
         .query_opt("SELECT id, body FROM pg_queue_jobs", &[])
         .await?
     {
-        let id = JobId::of(&row);
+        let id: JobId = row.get("id");
         let body: Vec<u8> = row.get("body");
         let body = Bytes::from(body);
 
@@ -45,9 +45,16 @@ pub async fn complete(t: &Transaction<'_>, _job: &Job) -> Result<()> {
     Ok(())
 }
 
-impl JobId {
-    fn of(_row: &Row) -> Self {
-        Self {}
+impl<'a> FromSql<'a> for JobId {
+    fn from_sql(
+        _: &tokio_postgres::types::Type,
+        _: &'a [u8],
+    ) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(JobId {})
+    }
+
+    fn accepts(ty: &tokio_postgres::types::Type) -> bool {
+        i64::accepts(ty)
     }
 }
 
