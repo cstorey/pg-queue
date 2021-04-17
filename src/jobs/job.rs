@@ -18,13 +18,12 @@ pub struct Job {
     pub body: Bytes,
 }
 
+const PRODUCE_JOB_SQL: &str = "INSERT INTO pg_queue_jobs (body) VALUES ($1) RETURNING (id)";
+const CONSUME_JOB_SQL: &str = "SELECT id, body FROM pg_queue_jobs";
+const COMPLETE_JOB_SQL: &str = "DELETE FROM pg_queue_jobs WHERE id = $1";
+
 pub async fn produce(t: &Transaction<'_>, body: Bytes) -> Result<Job> {
-    let row = t
-        .query_one(
-            "INSERT INTO pg_queue_jobs (body) VALUES ($1) RETURNING (id)",
-            &[&&*body],
-        )
-        .await?;
+    let row = t.query_one(PRODUCE_JOB_SQL, &[&&*body]).await?;
 
     let id = row.get("id");
 
@@ -32,10 +31,7 @@ pub async fn produce(t: &Transaction<'_>, body: Bytes) -> Result<Job> {
 }
 
 pub async fn consume_one(t: &Transaction<'_>) -> Result<Option<Job>> {
-    if let Some(row) = t
-        .query_opt("SELECT id, body FROM pg_queue_jobs", &[])
-        .await?
-    {
+    if let Some(row) = t.query_opt(CONSUME_JOB_SQL, &[]).await? {
         let id: JobId = row.get("id");
         let body: Vec<u8> = row.get("body");
         let body = Bytes::from(body);
@@ -49,9 +45,7 @@ pub async fn consume_one(t: &Transaction<'_>) -> Result<Option<Job>> {
 }
 
 pub async fn complete(t: &Transaction<'_>, job: &Job) -> Result<()> {
-    let nrows = t
-        .execute("DELETE FROM pg_queue_jobs WHERE id = $1", &[&job.id])
-        .await?;
+    let nrows = t.execute(COMPLETE_JOB_SQL, &[&job.id]).await?;
 
     if nrows == 1 {
         Ok(())
