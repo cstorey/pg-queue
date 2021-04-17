@@ -15,34 +15,47 @@ pub struct JobId {
 #[derive(Debug)]
 pub struct Job {
     pub id: JobId,
+    pub retried_count: i64,
     pub body: Bytes,
 }
 
-const PRODUCE_JOB_SQL: &str = "INSERT INTO pg_queue_jobs (body) VALUES ($1) RETURNING (id)";
+const PRODUCE_JOB_SQL: &str =
+    "INSERT INTO pg_queue_jobs (body) VALUES ($1) RETURNING id, retried_count";
 const CONSUME_JOB_SQL: &str = "\
-SELECT id, body FROM pg_queue_jobs \
+SELECT id, retried_count, body FROM pg_queue_jobs \
 WHERE last_tried_at IS NULL OR last_tried_at < CURRENT_TIMESTAMP \
 FOR UPDATE SKIP LOCKED \
 LIMIT 1";
 const COMPLETE_JOB_SQL: &str = "DELETE FROM pg_queue_jobs WHERE id = $1";
-const RETRY_LATER_SQL: &str =
-    "UPDATE pg_queue_jobs SET last_tried_at = current_timestamp WHERE id = $1";
+const RETRY_LATER_SQL: &str = "UPDATE pg_queue_jobs
+    SET last_tried_at = current_timestamp, retried_count = retried_count + 1
+    WHERE id = $1";
 
 pub async fn produce(t: &Transaction<'_>, body: Bytes) -> Result<Job> {
     let row = t.query_one(PRODUCE_JOB_SQL, &[&&*body]).await?;
 
     let id = row.get("id");
+    let retried_count = row.get("retried_count");
 
-    Ok(Job { id, body })
+    Ok(Job {
+        id,
+        retried_count,
+        body,
+    })
 }
 
 pub async fn consume_one(t: &Transaction<'_>) -> Result<Option<Job>> {
     if let Some(row) = t.query_opt(CONSUME_JOB_SQL, &[]).await? {
         let id: JobId = row.get("id");
+        let retried_count = row.get("retried_count");
         let body: Vec<u8> = row.get("body");
         let body = Bytes::from(body);
 
-        let job = Job { id, body };
+        let job = Job {
+            id,
+            retried_count,
+            body,
+        };
 
         Ok(Some(job))
     } else {

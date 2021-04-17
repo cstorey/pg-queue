@@ -200,6 +200,41 @@ async fn retry_later_on_complete_job_fails() -> Result<()> {
 }
 
 #[tokio::test]
+async fn job_can_indicate_number_of_retries() -> Result<()> {
+    setup_logging();
+    let schema = "jobs_can_limit_number_of_retries";
+    let pg_config = load_pg_config(schema).context("pg-config")?;
+    setup_jobs(schema).await;
+
+    let mut client = connect(&pg_config).await.context("connect")?;
+
+    {
+        let t = client.transaction().await?;
+        let a = produce(&t, "a".as_bytes().into())
+            .await
+            .context("produce")?;
+
+        assert_eq!(a.retried_count, 0);
+
+        t.commit().await.context("commit")?;
+    }
+
+    for attempt in 0i64..5 {
+        let t = client.transaction().await?;
+        let job = consume_one(&t)
+            .await
+            .context("consume_one")?
+            .expect("a job");
+        assert_eq!(job.retried_count, attempt);
+
+        retry_later(&t, &job).await.context("retry_later")?;
+        t.commit().await?;
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn each_job_is_only_allocated_to_a_single_consumer() -> Result<()> {
     setup_logging();
     let schema = "jobs_each_job_is_only_allocated_to_a_single_consumer";
