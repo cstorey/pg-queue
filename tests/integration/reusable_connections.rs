@@ -5,14 +5,14 @@ use anyhow::{Context, Result};
 use pg_queue::logs::{produce, wait_until_visible, Batch, Cursor};
 use tracing::debug;
 
-use crate::{connect, load_pg_config, setup_db, setup_logging};
+use crate::{connect, load_pg_config, setup_log, setup_logging};
 
 #[tokio::test]
 async fn example_over_connection() -> Result<()> {
     setup_logging();
     let schema = "example_over_connection";
     let pg_config = load_pg_config(schema).context("pg-config")?;
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut pg = connect(&pg_config).await.context("connect")?;
 
@@ -36,7 +36,7 @@ async fn example_over_transaction() -> Result<()> {
     setup_logging();
     let schema = "example_over_transaction";
     let pg_config = load_pg_config(schema).context("pg-config")?;
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut pg = connect(&pg_config).await.context("connect")?;
 
@@ -64,7 +64,7 @@ async fn example_consuming_in_chunks() -> Result<()> {
     setup_logging();
     let schema = "example_consuming_in_chunks";
     let pg_config = load_pg_config(schema).context("pg-config")?;
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut pg = connect(&pg_config).await.context("connect")?;
 

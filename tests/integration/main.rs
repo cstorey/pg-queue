@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use tokio_postgres::{self, Client, Config, NoTls};
 use tracing::debug;
 
-use pg_queue::logs::setup;
+use pg_queue::logs;
 use tracing_log::LogTracer;
 use tracing_subscriber::EnvFilter;
 
@@ -29,11 +29,18 @@ async fn connect(config: &Config) -> Result<Client> {
     Ok(client)
 }
 
-async fn setup_db(schema: &str) {
+async fn setup_log(schema: &str) {
     let pg_config = load_pg_config(schema).expect("pg-config");
 
     let mut client = connect(&pg_config).await.expect("connect");
 
+    create_fresh_schema(&mut client, schema)
+        .await
+        .expect("connect");
+    logs::setup(&client).await.expect("setup");
+}
+
+async fn create_fresh_schema(client: &mut Client, schema: &str) -> Result<()> {
     let t = client.transaction().await.expect("BEGIN");
     t.execute(
         &*format!("DROP SCHEMA IF EXISTS \"{}\" CASCADE", schema),
@@ -48,7 +55,7 @@ async fn setup_db(schema: &str) {
         .expect("execute");
     t.commit().await.expect("commit");
 
-    setup(&client).await.expect("setup");
+    Ok(())
 }
 
 pub(crate) fn setup_logging() {

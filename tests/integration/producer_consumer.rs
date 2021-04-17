@@ -10,14 +10,14 @@ use tracing::{debug, info};
 
 use pg_queue::logs::{produce, produce_meta, Batch, Consumer, Version};
 
-use crate::{connect, load_pg_config, setup_db, setup_logging};
+use crate::{connect, load_pg_config, setup_log, setup_logging};
 
 #[tokio::test]
 async fn can_produce_none() {
     setup_logging();
     let schema = "producer_consumer_can_produce_none";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     debug!("setup consumer");
     let mut cons = Consumer::connect(&pg_config, NoTls, "default")
@@ -32,7 +32,7 @@ async fn can_produce_one() {
     setup_logging();
     let schema = "producer_consumer_can_produce_one";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut cons = Consumer::connect(&pg_config, NoTls, "default")
         .await
@@ -64,7 +64,7 @@ async fn can_produce_with_metadata() {
     setup_logging();
     let schema = "producer_consumer_can_produce_with_metadata";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut cons = Consumer::connect(&pg_config, NoTls, "default")
         .await
@@ -98,7 +98,7 @@ async fn can_produce_several() {
     setup_logging();
     let schema = "producer_consumer_can_produce_several";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut cons = Consumer::connect(&pg_config, NoTls, "default")
         .await
@@ -133,7 +133,7 @@ async fn can_produce_ordered() {
     setup_logging();
     let schema = "producer_consumer_can_produce_ordered";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
 
@@ -150,7 +150,7 @@ async fn can_produce_in_batches() {
     setup_logging();
     let schema = "producer_consumer_can_produce_in_batches";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut cons = Consumer::connect(&pg_config, NoTls, "default")
         .await
@@ -190,7 +190,7 @@ async fn can_produce_in_batches_with_metadata() {
     setup_logging();
     let schema = "producer_consumer_can_produce_in_batches_with_metadata";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut cons = Consumer::connect(&pg_config, NoTls, "default")
         .await
@@ -221,7 +221,7 @@ async fn can_rollback_batches() {
     setup_logging();
     let schema = "producer_consumer_can_rollback_batches";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut cons = Consumer::connect(&pg_config, NoTls, "default")
         .await
@@ -249,7 +249,7 @@ async fn can_produce_incrementally() {
     setup_logging();
     let schema = "producer_consumer_can_produce_incrementally";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
 
@@ -277,7 +277,7 @@ async fn can_consume_incrementally() {
     setup_logging();
     let schema = "producer_consumer_can_consume_incrementally";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
 
@@ -315,7 +315,7 @@ async fn can_restart_consume_at_commit_point() {
     setup_logging();
     let schema = "producer_consumer_can_restart_consume_at_commit_point";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
     produce(&mut client, "key", b"0").await.expect("produce");
@@ -357,7 +357,7 @@ async fn can_progress_without_commit() {
     setup_logging();
     let schema = "producer_consumer_can_progress_without_commit";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
 
@@ -384,7 +384,7 @@ async fn can_consume_multiply() {
     setup_logging();
     let schema = "producer_consumer_can_consume_multiply";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
 
@@ -435,7 +435,7 @@ async fn producing_concurrently_should_never_leave_holes() {
     setup_logging();
     let schema = "producer_consumer_producing_concurrently_should_never_leave_holes";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut client1 = connect(&pg_config).await.expect("connect");
 
@@ -498,7 +498,7 @@ async fn can_list_zero_consumer_offsets() {
     setup_logging();
     let schema = "producer_consumer_can_list_zero_consumer_offsets";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
 
@@ -516,7 +516,7 @@ async fn can_list_consumer_offset() {
     setup_logging();
     let schema = "producer_consumer_can_list_consumer_offset";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
     produce(&mut client, "key", b"0").await.expect("produce");
@@ -545,7 +545,7 @@ async fn can_list_consumer_offsets() {
     setup_logging();
     let schema = "producer_consumer_can_list_consumer_offsets";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
     produce(&mut client, "key", b"0").await.expect("produce");
@@ -587,7 +587,7 @@ async fn can_discard_entries() {
     setup_logging();
     let schema = "producer_consumer_can_discard_entries";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
     produce(&mut client, "key", b"0").await.expect("produce");
@@ -627,7 +627,7 @@ async fn can_discard_on_empty() {
     setup_logging();
     let schema = "producer_consumer_can_discard_on_empty";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
     let mut cons = Consumer::connect(&pg_config, NoTls, "cleaner")
         .await
         .expect("consumer");
@@ -641,7 +641,7 @@ async fn can_discard_consumed() {
     setup_logging();
     let schema = "producer_consumer_can_discard_consumed";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
     produce(&mut client, "key", b"0").await.expect("produce");
@@ -680,7 +680,7 @@ async fn can_discard_consumed_on_empty() {
     setup_logging();
     let schema = "producer_consumer_can_discard_consumed_on_empty";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
     let mut cons = Consumer::connect(&pg_config, NoTls, "cleaner")
         .await
         .expect("consumer");
@@ -692,7 +692,7 @@ async fn can_discard_after_written() {
     setup_logging();
     let schema = "producer_consumer_can_discard_after_written";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
     let v = produce(&mut client, "key", b"0").await.expect("produce");
@@ -712,7 +712,7 @@ async fn can_discard_consumed_without_losing_entries() {
     setup_logging();
     let schema = "producer_consumer_can_discard_consumed_without_losing_entries";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
     let _ = produce(&mut client, "key", b"0").await.expect("produce");
@@ -770,7 +770,7 @@ async fn can_remove_consumer_offset() {
     setup_logging();
     let schema = "producer_consumer_can_remove_consumer_offset";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
     produce(&mut client, "key", b"0").await.expect("produce");
@@ -808,7 +808,7 @@ async fn removing_non_consumer_is_noop() {
     setup_logging();
     let schema = "producer_consumer_removing_non_consumer_is_noop";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
     produce(&mut client, "key", b"0").await.expect("produce");
@@ -843,7 +843,7 @@ async fn can_produce_consume_with_wait() {
     setup_logging();
     let schema = "producer_consumer_can_produce_consume_with_wait";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
     let mut cons = Consumer::connect(&pg_config, NoTls, "default")
         .await
         .expect("consumer");
@@ -873,7 +873,7 @@ async fn can_read_timestamp() {
     let start = chrono::Utc::now();
     let schema = "producer_consumer_can_read_timestamp";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
     let mut cons = Consumer::connect(&pg_config, NoTls, "default")
         .await
         .expect("consumer");
@@ -907,7 +907,7 @@ async fn can_batch_produce_pipelined() {
     setup_logging();
     let schema = "producer_consumer_can_batch_produce_pipelined";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
     let mut cons = Consumer::connect(&pg_config, NoTls, "default")
         .await
         .expect("consumer");
@@ -954,7 +954,7 @@ async fn can_batch_produce_with_transaction_then_insert_order() {
     setup_logging();
     let schema = "producer_consumer_can_batch_produce_with_transaction_then_insert_order";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut client1 = connect(&pg_config).await.expect("connect");
     let mut client2 = connect(&pg_config).await.expect("connect");
@@ -993,7 +993,7 @@ async fn can_recover_from_restore_without_without_resetting_epoch() {
     setup_logging();
     let schema = "producer_consumer_can_recover_from_restore_without_without_resetting_epoch";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
 
@@ -1048,7 +1048,7 @@ async fn can_recover_from_transaction_id_reset_with_only_consumers() {
     setup_logging();
     let schema = "producer_consumer_can_recover_from_transaction_id_reset_with_only_consumers";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
 
@@ -1102,7 +1102,7 @@ async fn can_recover_from_transaction_id_reset_with_entries() {
     setup_logging();
     let schema = "producer_consumer_can_recover_from_transaction_id_reset_with_entries";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
 
@@ -1174,7 +1174,7 @@ async fn can_recover_from_transaction_id_reset_when_committing_offsets() {
     setup_logging();
     let schema = "can_recover_from_transaction_id_reset_when_committing_offsets";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
 
@@ -1266,7 +1266,7 @@ async fn can_recover_from_transaction_id_reset_with_discard_upto() {
     setup_logging();
     let schema = "can_recover_from_transaction_id_reset_with_discard_upto";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
 
@@ -1343,7 +1343,7 @@ async fn can_recover_from_transaction_id_reset_with_discard_consumed() {
     setup_logging();
     let schema = "can_recover_from_transaction_id_reset_with_discard_consumed";
     let pg_config = load_pg_config(schema).expect("pg-config");
-    setup_db(schema).await;
+    setup_log(schema).await;
 
     let mut client = connect(&pg_config).await.expect("connect");
 
