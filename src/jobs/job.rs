@@ -19,8 +19,13 @@ pub struct Job {
 }
 
 const PRODUCE_JOB_SQL: &str = "INSERT INTO pg_queue_jobs (body) VALUES ($1) RETURNING (id)";
-const CONSUME_JOB_SQL: &str = "SELECT id, body FROM pg_queue_jobs";
+const CONSUME_JOB_SQL: &str = "\
+SELECT id, body FROM pg_queue_jobs \
+WHERE last_tried_at IS NULL OR last_tried_at < CURRENT_TIMESTAMP \
+LIMIT 1";
 const COMPLETE_JOB_SQL: &str = "DELETE FROM pg_queue_jobs WHERE id = $1";
+const RETRY_LATER_SQL: &str =
+    "UPDATE pg_queue_jobs SET last_tried_at = current_timestamp WHERE id = $1";
 
 pub async fn produce(t: &Transaction<'_>, body: Bytes) -> Result<Job> {
     let row = t.query_one(PRODUCE_JOB_SQL, &[&&*body]).await?;
@@ -47,6 +52,15 @@ pub async fn consume_one(t: &Transaction<'_>) -> Result<Option<Job>> {
 pub async fn complete(t: &Transaction<'_>, job: &Job) -> Result<()> {
     let nrows = t.execute(COMPLETE_JOB_SQL, &[&job.id]).await?;
 
+    if nrows == 1 {
+        Ok(())
+    } else {
+        Err(Error::JobNotFound)
+    }
+}
+
+pub async fn retry_later(t: &Transaction<'_>, job: &Job) -> Result<()> {
+    let nrows = t.execute(RETRY_LATER_SQL, &[&job.id]).await?;
     if nrows == 1 {
         Ok(())
     } else {

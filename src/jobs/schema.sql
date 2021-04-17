@@ -4,5 +4,6 @@
 CREATE TABLE IF NOT EXISTS pg_queue_jobs (
     id BIGSERIAL NOT NULL,
     body bytea NOT NULL,
+    last_tried_at TIMESTAMPTZ,
     PRIMARY KEY (id)
 );
