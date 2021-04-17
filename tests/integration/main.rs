@@ -4,10 +4,11 @@ use anyhow::{Context, Result};
 use tokio_postgres::{self, Client, Config, NoTls};
 use tracing::debug;
 
-use pg_queue::logs;
+use pg_queue::{jobs, logs};
 use tracing_log::LogTracer;
 use tracing_subscriber::EnvFilter;
 
+mod job_worker;
 mod producer_consumer;
 mod reusable_connections;
 
@@ -38,6 +39,17 @@ async fn setup_log(schema: &str) {
         .await
         .expect("connect");
     logs::setup(&client).await.expect("setup");
+}
+
+async fn setup_jobs(schema: &str) {
+    let pg_config = load_pg_config(schema).expect("pg-config");
+
+    let mut client = connect(&pg_config).await.expect("connect");
+
+    create_fresh_schema(&mut client, schema)
+        .await
+        .expect("connect");
+    jobs::setup(&client).await.expect("setup");
 }
 
 async fn create_fresh_schema(client: &mut Client, schema: &str) -> Result<()> {

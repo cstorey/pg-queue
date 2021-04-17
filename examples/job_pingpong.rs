@@ -29,30 +29,26 @@ async fn main() -> Result<()> {
     let (mut client, conn) = pg.connect(NoTls).await.context("connect pg")?;
     tokio::spawn(conn);
 
-    jobs::setup(&mut client).await.context("setup db")?;
+    jobs::setup(&client).await.context("setup db")?;
 
     {
         let t = client.transaction().await?;
         let blob = serde_json::to_vec(&0u64)?;
-        let job0: Job = jobs::produce(&t, "ping", blob.into())
-            .await
-            .context("create")?;
+        let job0: Job = jobs::produce(&t, blob.into()).await.context("create")?;
         debug!(job_id=%job0.id, "Created job");
         t.commit().await?;
     };
 
     {
         let t = client.transaction().await?;
-        let job: Job = jobs::consume_one(&t, "ping").await?;
-        debug!(job_kind=%job.kind, job_id=%job.id, "processing");
+        let job: Job = jobs::consume_one(&t).await?.expect("just produced job");
+        debug!(job_id=%job.id, "processing");
         // do stuff
-        let val: u64 = serde_json::from_slice(&job.data)?;
+        let val: u64 = serde_json::from_slice(&job.body)?;
         let newval = val + 1;
         let blob = serde_json::to_vec(&newval)?;
-        let job1: Job = jobs::produce(&t, "pong", blob.into())
-            .await
-            .context("create 1")?;
-        debug!(job_kind=%job1.kind, job_id=%job1.id, "Produced new job");
+        let job1: Job = jobs::produce(&t, blob.into()).await.context("create 1")?;
+        debug!(job_id=%job1.id, "Produced new job");
 
         jobs::complete(&t, &job).await?;
         t.commit().await?;
@@ -60,10 +56,11 @@ async fn main() -> Result<()> {
 
     {
         let t = client.transaction().await?;
-        let job: Job = jobs::consume_one(&t, "pong").await?;
-        debug!(job_kind=%job.kind, job_id=%job.id, "processing");
+        let job: Job = jobs::consume_one(&t).await?.expect("just produced job");
+        debug!(job_id=%job.id, "processing");
         // do stuff
-
+        let val: u64 = serde_json::from_slice(&job.body)?;
+        debug!(job_id=%job.id, value=?val, "Process job");
         jobs::complete(&t, &job).await?;
         t.commit().await?;
     }
