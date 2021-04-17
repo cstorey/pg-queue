@@ -39,8 +39,10 @@ pub async fn consume_one(t: &Transaction<'_>) -> Result<Option<Job>> {
     }
 }
 
-pub async fn complete(_t: &Transaction<'_>, _job: &Job) -> Result<Job> {
-    todo!("complete")
+pub async fn complete(t: &Transaction<'_>, _job: &Job) -> Result<()> {
+    t.execute("DELETE FROM pg_queue_jobs", &[]).await?;
+
+    Ok(())
 }
 
 impl JobId {
