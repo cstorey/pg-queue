@@ -6,7 +6,7 @@ use tokio_postgres::{
     Transaction,
 };
 
-use crate::jobs::Result;
+use crate::jobs::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct JobId {
@@ -49,10 +49,15 @@ pub async fn consume_one(t: &Transaction<'_>) -> Result<Option<Job>> {
 }
 
 pub async fn complete(t: &Transaction<'_>, job: &Job) -> Result<()> {
-    t.execute("DELETE FROM pg_queue_jobs WHERE id = $1", &[&job.id])
+    let nrows = t
+        .execute("DELETE FROM pg_queue_jobs WHERE id = $1", &[&job.id])
         .await?;
 
-    Ok(())
+    if nrows == 1 {
+        Ok(())
+    } else {
+        Err(Error::JobNotFound)
+    }
 }
 
 impl<'a> FromSql<'a> for JobId {
