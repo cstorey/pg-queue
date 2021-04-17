@@ -19,6 +19,9 @@ pub struct Job {
     pub body: Bytes,
 }
 
+#[derive(Debug, Clone)]
+pub struct Config {}
+
 const PRODUCE_JOB_SQL: &str =
     "INSERT INTO pg_queue_jobs (body) VALUES ($1) RETURNING id, retried_count";
 const CONSUME_JOB_SQL: &str = "\
@@ -45,41 +48,43 @@ pub async fn produce(t: &Transaction<'_>, body: Bytes) -> Result<Job> {
     })
 }
 
-pub async fn consume_one(t: &Transaction<'_>) -> Result<Option<Job>> {
-    if let Some(row) = t.query_opt(CONSUME_JOB_SQL, &[]).await? {
-        let id: JobId = row.get("id");
-        let retried_count = row.get("retried_count");
-        let body: Vec<u8> = row.get("body");
-        let body = Bytes::from(body);
+impl Config {
+    pub async fn consume_one(&self, t: &Transaction<'_>) -> Result<Option<Job>> {
+        if let Some(row) = t.query_opt(CONSUME_JOB_SQL, &[]).await? {
+            let id: JobId = row.get("id");
+            let retried_count = row.get("retried_count");
+            let body: Vec<u8> = row.get("body");
+            let body = Bytes::from(body);
 
-        let job = Job {
-            id,
-            retried_count,
-            body,
-        };
+            let job = Job {
+                id,
+                retried_count,
+                body,
+            };
 
-        Ok(Some(job))
-    } else {
-        Ok(None)
+            Ok(Some(job))
+        } else {
+            Ok(None)
+        }
     }
-}
 
-pub async fn complete(t: &Transaction<'_>, job: &Job) -> Result<()> {
-    let nrows = t.execute(COMPLETE_JOB_SQL, &[&job.id]).await?;
+    pub async fn complete(&self, t: &Transaction<'_>, job: &Job) -> Result<()> {
+        let nrows = t.execute(COMPLETE_JOB_SQL, &[&job.id]).await?;
 
-    if nrows == 1 {
-        Ok(())
-    } else {
-        Err(Error::JobNotFound)
+        if nrows == 1 {
+            Ok(())
+        } else {
+            Err(Error::JobNotFound)
+        }
     }
-}
 
-pub async fn retry_later(t: &Transaction<'_>, job: &Job) -> Result<()> {
-    let nrows = t.execute(RETRY_LATER_SQL, &[&job.id]).await?;
-    if nrows == 1 {
-        Ok(())
-    } else {
-        Err(Error::JobNotFound)
+    pub async fn retry_later(&self, t: &Transaction<'_>, job: &Job) -> Result<()> {
+        let nrows = t.execute(RETRY_LATER_SQL, &[&job.id]).await?;
+        if nrows == 1 {
+            Ok(())
+        } else {
+            Err(Error::JobNotFound)
+        }
     }
 }
 
@@ -116,5 +121,11 @@ impl ToSql for JobId {
 impl fmt::Display for JobId {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(fmt, "J{}", self.inner)
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {}
     }
 }

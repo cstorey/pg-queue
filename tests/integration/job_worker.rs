@@ -6,7 +6,7 @@ use maplit::btreeset;
 use tokio::time::sleep;
 use tracing::{debug, info, Instrument};
 
-use pg_queue::jobs::{complete, consume_one, produce, retry_later, Error};
+use pg_queue::jobs::{produce, Config, Error};
 
 use crate::{connect, load_pg_config, setup_jobs, setup_logging};
 
@@ -18,6 +18,7 @@ async fn can_produce_one() -> Result<()> {
     setup_jobs(schema).await;
 
     let mut client = connect(&pg_config).await.context("connect")?;
+    let config = Config::default();
 
     let t = client.transaction().await?;
 
@@ -25,7 +26,7 @@ async fn can_produce_one() -> Result<()> {
         .await
         .context("produce")?;
 
-    let job = consume_one(&t).await?;
+    let job = config.consume_one(&t).await?;
 
     assert_eq!(
         job.as_ref().map(|j| (j.id, j.body.clone())),
@@ -45,6 +46,7 @@ async fn marking_as_complete_removes_from_available_jobs() -> Result<()> {
     setup_jobs(schema).await;
 
     let mut client = connect(&pg_config).await.context("connect")?;
+    let config = Config::default();
 
     let t = client.transaction().await?;
 
@@ -52,9 +54,9 @@ async fn marking_as_complete_removes_from_available_jobs() -> Result<()> {
         .await
         .context("produce")?;
 
-    complete(&t, &orig).await.context("complete")?;
+    config.complete(&t, &orig).await.context("complete")?;
 
-    let job = consume_one(&t).await?;
+    let job = config.consume_one(&t).await?;
 
     assert!(job.is_none(), "Job should have been completed");
 
@@ -71,6 +73,7 @@ async fn marking_as_complete_twice_fails() -> Result<()> {
     setup_jobs(schema).await;
 
     let mut client = connect(&pg_config).await.context("connect")?;
+    let config = Config::default();
 
     let t = client.transaction().await?;
 
@@ -78,9 +81,10 @@ async fn marking_as_complete_twice_fails() -> Result<()> {
         .await
         .context("produce")?;
 
-    complete(&t, &orig).await.context("complete")?;
+    config.complete(&t, &orig).await.context("complete")?;
 
-    let e = complete(&t, &orig)
+    let e = config
+        .complete(&t, &orig)
         .await
         .expect_err("Completing job twice should fail");
     match e {
@@ -101,6 +105,7 @@ async fn marking_one_complete_means_others_remain_available() -> Result<()> {
     setup_jobs(schema).await;
 
     let mut client = connect(&pg_config).await.context("connect")?;
+    let config = Config::default();
 
     let t = client.transaction().await?;
 
@@ -114,13 +119,13 @@ async fn marking_one_complete_means_others_remain_available() -> Result<()> {
         .await
         .context("produce")?;
 
-    complete(&t, &a).await.context("complete")?;
-    complete(&t, &c).await.context("complete")?;
+    config.complete(&t, &a).await.context("complete")?;
+    config.complete(&t, &c).await.context("complete")?;
 
     let mut ids = BTreeSet::new();
-    while let Some(job) = consume_one(&t).await.context("consume_one")? {
+    while let Some(job) = config.consume_one(&t).await.context("consume_one")? {
         ids.insert(job.id);
-        complete(&t, &job).await.context("complete")?;
+        config.complete(&t, &job).await.context("complete")?;
     }
 
     t.commit().await?;
@@ -138,6 +143,7 @@ async fn can_mark_job_to_retry_later() -> Result<()> {
     setup_jobs(schema).await;
 
     let mut client = connect(&pg_config).await.context("connect")?;
+    let config = Config::default();
 
     let t = client.transaction().await?;
 
@@ -148,12 +154,12 @@ async fn can_mark_job_to_retry_later() -> Result<()> {
         .await
         .context("produce")?;
 
-    retry_later(&t, &a).await.context("retry_later")?;
+    config.retry_later(&t, &a).await.context("retry_later")?;
 
     let mut ids = BTreeSet::new();
-    while let Some(job) = consume_one(&t).await.context("consume_one")? {
+    while let Some(job) = config.consume_one(&t).await.context("consume_one")? {
         ids.insert(job.id);
-        complete(&t, &job).await.context("produce")?;
+        config.complete(&t, &job).await.context("produce")?;
     }
 
     t.commit().await?;
@@ -162,9 +168,9 @@ async fn can_mark_job_to_retry_later() -> Result<()> {
     let mut later = BTreeSet::new();
     for attempt in 0i32.. {
         let t = client.transaction().await?;
-        if let Some(job) = consume_one(&t).await.context("consume_one")? {
+        if let Some(job) = config.consume_one(&t).await.context("consume_one")? {
             later.insert(job.id);
-            complete(&t, &job).await.context("complete")?;
+            config.complete(&t, &job).await.context("complete")?;
             break;
         }
         t.commit().await?;
@@ -185,6 +191,7 @@ async fn retry_later_on_complete_job_fails() -> Result<()> {
     setup_jobs(schema).await;
 
     let mut client = connect(&pg_config).await.context("connect")?;
+    let config = Config::default();
 
     let t = client.transaction().await?;
 
@@ -192,9 +199,10 @@ async fn retry_later_on_complete_job_fails() -> Result<()> {
         .await
         .context("produce")?;
 
-    complete(&t, &orig).await.context("complete")?;
+    config.complete(&t, &orig).await.context("complete")?;
 
-    let e = retry_later(&t, &orig)
+    let e = config
+        .retry_later(&t, &orig)
         .await
         .expect_err("Retrying job after completion should fail");
     match e {
@@ -215,6 +223,7 @@ async fn job_can_indicate_number_of_retries() -> Result<()> {
     setup_jobs(schema).await;
 
     let mut client = connect(&pg_config).await.context("connect")?;
+    let config = Config::default();
 
     {
         let t = client.transaction().await?;
@@ -235,11 +244,11 @@ async fn job_can_indicate_number_of_retries() -> Result<()> {
             info!("Attempting job");
             'backoff: for backoff_attempt in 0i32.. {
                 let t = client.transaction().await?;
-                if let Some(job) = consume_one(&t).await.context("consume_one")? {
+                if let Some(job) = config.consume_one(&t).await.context("consume_one")? {
                     info!(?backoff_attempt, "Found job: {:?}", job);
                     assert_eq!(job.retried_count, attempt, "For job {:?}", job);
 
-                    retry_later(&t, &job).await.context("retry_later")?;
+                    config.retry_later(&t, &job).await.context("retry_later")?;
                     t.commit().await?;
                     break 'backoff;
                 } else {
@@ -269,6 +278,7 @@ async fn each_job_is_only_allocated_to_a_single_consumer() -> Result<()> {
 
     let mut client1 = connect(&pg_config).await.context("connect")?;
     let mut client2 = connect(&pg_config).await.context("connect")?;
+    let config = Config::default();
 
     let t = client1.transaction().await?;
     produce(&t, "a".as_bytes().into())
@@ -282,11 +292,13 @@ async fn each_job_is_only_allocated_to_a_single_consumer() -> Result<()> {
     let t1 = client1.transaction().await?;
     let t2 = client2.transaction().await?;
 
-    let job_a = consume_one(&t1)
+    let job_a = config
+        .consume_one(&t1)
         .await
         .context("consume_one")?
         .expect("some job a");
-    let job_b = consume_one(&t2)
+    let job_b = config
+        .consume_one(&t2)
         .await
         .context("consume_one")?
         .expect("some job b");

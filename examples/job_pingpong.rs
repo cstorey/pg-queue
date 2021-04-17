@@ -31,6 +31,7 @@ async fn main() -> Result<()> {
 
     jobs::setup(&client).await.context("setup db")?;
 
+    let config = jobs::Config::default();
     {
         let t = client.transaction().await?;
         let blob = serde_json::to_vec(&0u64)?;
@@ -41,7 +42,7 @@ async fn main() -> Result<()> {
 
     {
         let t = client.transaction().await?;
-        let job: Job = jobs::consume_one(&t).await?.expect("just produced job");
+        let job: Job = config.consume_one(&t).await?.expect("just produced job");
         debug!(job_id=%job.id, "processing");
         // do stuff
         let val: u64 = serde_json::from_slice(&job.body)?;
@@ -50,18 +51,18 @@ async fn main() -> Result<()> {
         let job1: Job = jobs::produce(&t, blob.into()).await.context("create 1")?;
         debug!(job_id=%job1.id, "Produced new job");
 
-        jobs::complete(&t, &job).await?;
+        config.complete(&t, &job).await?;
         t.commit().await?;
     }
 
     {
         let t = client.transaction().await?;
-        let job: Job = jobs::consume_one(&t).await?.expect("just produced job");
+        let job: Job = config.consume_one(&t).await?.expect("just produced job");
         debug!(job_id=%job.id, "processing");
         // do stuff
         let val: u64 = serde_json::from_slice(&job.body)?;
         debug!(job_id=%job.id, value=?val, "Process job");
-        jobs::complete(&t, &job).await?;
+        config.complete(&t, &job).await?;
         t.commit().await?;
     }
 
