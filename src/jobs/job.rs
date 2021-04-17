@@ -22,6 +22,7 @@ const PRODUCE_JOB_SQL: &str = "INSERT INTO pg_queue_jobs (body) VALUES ($1) RETU
 const CONSUME_JOB_SQL: &str = "\
 SELECT id, body FROM pg_queue_jobs \
 WHERE last_tried_at IS NULL OR last_tried_at < CURRENT_TIMESTAMP \
+FOR UPDATE SKIP LOCKED \
 LIMIT 1";
 const COMPLETE_JOB_SQL: &str = "DELETE FROM pg_queue_jobs WHERE id = $1";
 const RETRY_LATER_SQL: &str =

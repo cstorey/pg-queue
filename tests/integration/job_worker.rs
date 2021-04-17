@@ -198,3 +198,42 @@ async fn retry_later_on_complete_job_fails() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn each_job_is_only_allocated_to_a_single_consumer() -> Result<()> {
+    setup_logging();
+    let schema = "jobs_each_job_is_only_allocated_to_a_single_consumer";
+    let pg_config = load_pg_config(schema).context("pg-config")?;
+    setup_jobs(schema).await;
+
+    let mut client1 = connect(&pg_config).await.context("connect")?;
+    let mut client2 = connect(&pg_config).await.context("connect")?;
+
+    let t = client1.transaction().await?;
+    produce(&t, "a".as_bytes().into())
+        .await
+        .context("produce")?;
+    produce(&t, "b".as_bytes().into())
+        .await
+        .context("produce")?;
+    t.commit().await.context("commit")?;
+
+    let t1 = client1.transaction().await?;
+    let t2 = client2.transaction().await?;
+
+    let job_a = consume_one(&t1)
+        .await
+        .context("consume_one")?
+        .expect("some job a");
+    let job_b = consume_one(&t2)
+        .await
+        .context("consume_one")?
+        .expect("some job b");
+
+    t1.commit().await?;
+    t2.commit().await?;
+
+    assert_ne!(job_a.id, job_b.id);
+
+    Ok(())
+}
