@@ -1,4 +1,8 @@
-use std::{collections::BTreeSet, time::Duration};
+use std::{
+    collections::BTreeSet,
+    convert::TryInto,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
@@ -143,7 +147,10 @@ async fn can_mark_job_to_retry_later() -> Result<()> {
     setup_jobs(schema).await;
 
     let mut client = connect(&pg_config).await.context("connect")?;
-    let config = Config::default();
+    let config = Config::builder()
+        .base_backoff(Duration::from_millis(1))
+        .backoff_exponent(1.0)
+        .build();
 
     let t = client.transaction().await?;
 
@@ -223,7 +230,10 @@ async fn job_can_indicate_number_of_retries() -> Result<()> {
     setup_jobs(schema).await;
 
     let mut client = connect(&pg_config).await.context("connect")?;
-    let config = Config::default();
+    let config = Config::builder()
+        .base_backoff(Duration::from_millis(1))
+        .backoff_exponent(1.0)
+        .build();
 
     {
         let t = client.transaction().await?;
@@ -236,7 +246,7 @@ async fn job_can_indicate_number_of_retries() -> Result<()> {
         t.commit().await.context("commit")?;
     }
 
-    for attempt in 0i64..5 {
+    for attempt in 0i32..5 {
         let span = tracing::error_span!("job_attempt", attempt = tracing::field::Empty);
         span.record("attempt", &attempt);
 
@@ -264,6 +274,102 @@ async fn job_can_indicate_number_of_retries() -> Result<()> {
         .instrument(span)
         .await
         .context("job attempt")?;
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn job_backs_off_exponentially() -> Result<()> {
+    setup_logging();
+    let schema = "jobs_job_backs_off_exponentially";
+    let pg_config = load_pg_config(schema).context("pg-config")?;
+    setup_jobs(schema).await;
+
+    let base_backoff = Duration::from_millis(100);
+    let backoff_exponent = 1.5f64;
+
+    let mut client = connect(&pg_config).await.context("connect")?;
+    let config = Config::builder()
+        .base_backoff(base_backoff)
+        .backoff_exponent(backoff_exponent)
+        .build();
+
+    {
+        let t = client.transaction().await?;
+        let a = produce(&t, "a".as_bytes().into())
+            .await
+            .context("produce")?;
+
+        assert_eq!(a.retried_count, 0);
+
+        t.commit().await.context("commit")?;
+    }
+
+    let mut times = Vec::new();
+    let retries = 0i64..5;
+
+    for attempt in retries.clone() {
+        let span = tracing::error_span!("job_attempt", attempt = tracing::field::Empty);
+        span.record("attempt", &attempt);
+
+        async {
+            let start = Instant::now();
+            info!("Attempting job");
+            'backoff: for backoff_attempt in 0i32.. {
+                let t = client.transaction().await?;
+                if let Some(job) = config.consume_one(&t).await.context("consume_one")? {
+                    info!(?backoff_attempt, elapsed=?start.elapsed(), "Found job: {:?}", job);
+
+                    config.retry_later(&t, &job).await.context("retry_later")?;
+                    t.commit().await?;
+                    break 'backoff;
+                } else {
+                    t.commit().await?;
+                    let backoff = Duration::from_millis(10).mul_f64((1.5f64).powi(backoff_attempt));
+                    debug!(?backoff, ?backoff_attempt, "Pausing until job visible");
+                    sleep(backoff).await;
+                }
+            }
+
+            times.push(start.elapsed());
+
+            Ok::<(), anyhow::Error>(())
+        }
+        .instrument(span)
+        .await
+        .context("job attempt")?;
+    }
+
+    println!("Elapsed times: {:?}", times);
+
+    // the first try should be immediate
+    let mut expected = vec![Duration::from_millis(0)];
+    // And the subsequent _retries_ starting from base_backoff
+    expected.extend(
+        retries
+            .into_iter()
+            .map(|r| base_backoff.mul_f64(backoff_exponent.powi(r.try_into().unwrap()))),
+    );
+
+    println!("Expected times: {:?}", expected);
+    for (i, (elapsed, expected)) in times
+        .iter()
+        .cloned()
+        .zip(expected.iter().cloned())
+        .enumerate()
+    {
+        println!(
+            "retry:{:4}; elapsed:{:8?}; expected:{:8?}",
+            i, elapsed, expected
+        );
+        assert!(
+            elapsed >= expected,
+            "Retry:{}; Elapsed time {:?} should at least expected {:?}",
+            i,
+            elapsed,
+            expected
+        );
     }
 
     Ok(())
