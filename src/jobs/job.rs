@@ -99,7 +99,7 @@ impl ToSql for JobId {
 }
 
 impl fmt::Display for JobId {
-    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!()
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(fmt, "J{}", self.inner)
     }
 }
