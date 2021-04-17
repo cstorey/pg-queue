@@ -1,8 +1,10 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, time::Duration};
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use maplit::btreeset;
+use tokio::time::sleep;
+use tracing::{debug, info, Instrument};
 
 use pg_queue::jobs::{complete, consume_one, produce, retry_later, Error};
 
@@ -157,13 +159,19 @@ async fn can_mark_job_to_retry_later() -> Result<()> {
     t.commit().await?;
     assert_eq!(ids, btreeset! {b.id});
 
-    let t = client.transaction().await?;
     let mut later = BTreeSet::new();
-    while let Some(job) = consume_one(&t).await.context("consume_one")? {
-        later.insert(job.id);
-        complete(&t, &job).await.context("complete")?;
+    for attempt in 0i32.. {
+        let t = client.transaction().await?;
+        if let Some(job) = consume_one(&t).await.context("consume_one")? {
+            later.insert(job.id);
+            complete(&t, &job).await.context("complete")?;
+            break;
+        }
+        t.commit().await?;
+        let backoff = Duration::from_millis(2).mul_f64((1.5f64).powi(attempt));
+        debug!(?backoff, "Pausing until job visible");
+        sleep(backoff).await;
     }
-    t.commit().await?;
     assert_eq!(later, btreeset! {a.id});
 
     Ok(())
@@ -220,15 +228,33 @@ async fn job_can_indicate_number_of_retries() -> Result<()> {
     }
 
     for attempt in 0i64..5 {
-        let t = client.transaction().await?;
-        let job = consume_one(&t)
-            .await
-            .context("consume_one")?
-            .expect("a job");
-        assert_eq!(job.retried_count, attempt);
+        let span = tracing::error_span!("job_attempt", attempt = tracing::field::Empty);
+        span.record("attempt", &attempt);
 
-        retry_later(&t, &job).await.context("retry_later")?;
-        t.commit().await?;
+        async {
+            info!("Attempting job");
+            'backoff: for backoff_attempt in 0i32.. {
+                let t = client.transaction().await?;
+                if let Some(job) = consume_one(&t).await.context("consume_one")? {
+                    info!(?backoff_attempt, "Found job: {:?}", job);
+                    assert_eq!(job.retried_count, attempt, "For job {:?}", job);
+
+                    retry_later(&t, &job).await.context("retry_later")?;
+                    t.commit().await?;
+                    break 'backoff;
+                } else {
+                    t.commit().await?;
+                    let backoff = Duration::from_millis(10).mul_f64((1.5f64).powi(backoff_attempt));
+                    debug!(?backoff, ?backoff_attempt, "Pausing until job visible");
+                    sleep(backoff).await;
+                }
+            }
+
+            Ok::<(), anyhow::Error>(())
+        }
+        .instrument(span)
+        .await
+        .context("job attempt")?;
     }
 
     Ok(())

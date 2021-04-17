@@ -23,12 +23,13 @@ const PRODUCE_JOB_SQL: &str =
     "INSERT INTO pg_queue_jobs (body) VALUES ($1) RETURNING id, retried_count";
 const CONSUME_JOB_SQL: &str = "\
 SELECT id, retried_count, body FROM pg_queue_jobs \
-WHERE last_tried_at IS NULL OR last_tried_at < CURRENT_TIMESTAMP \
+WHERE retry_at <= CURRENT_TIMESTAMP \
 FOR UPDATE SKIP LOCKED \
 LIMIT 1";
 const COMPLETE_JOB_SQL: &str = "DELETE FROM pg_queue_jobs WHERE id = $1";
 const RETRY_LATER_SQL: &str = "UPDATE pg_queue_jobs
-    SET last_tried_at = current_timestamp, retried_count = retried_count + 1
+    SET retry_at = current_timestamp + interval '0.01 second',
+        retried_count = retried_count + 1
     WHERE id = $1";
 
 pub async fn produce(t: &Transaction<'_>, body: Bytes) -> Result<Job> {
