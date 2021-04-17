@@ -1,6 +1,8 @@
-use anyhow::{Context, Result};
+use std::collections::BTreeSet;
 
+use anyhow::{Context, Result};
 use bytes::Bytes;
+use maplit::btreeset;
 
 use pg_queue::jobs::{complete, consume_one, produce};
 
@@ -60,5 +62,38 @@ async fn marking_as_complete_removes_from_available_jobs() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore]
-async fn marking_one_complete_means_others_remain_available() {}
+async fn marking_one_complete_means_others_remain_available() -> Result<()> {
+    setup_logging();
+    let schema = "jobs_marking_one_complete_means_others_remain_available";
+    let pg_config = load_pg_config(schema).context("pg-config")?;
+    setup_jobs(schema).await;
+
+    let mut client = connect(&pg_config).await.context("connect")?;
+
+    let t = client.transaction().await?;
+
+    let a = produce(&t, "a".as_bytes().into())
+        .await
+        .context("produce")?;
+    let b = produce(&t, "b".as_bytes().into())
+        .await
+        .context("produce")?;
+    let c = produce(&t, "c".as_bytes().into())
+        .await
+        .context("produce")?;
+
+    complete(&t, &a).await.context("complete")?;
+    complete(&t, &c).await.context("complete")?;
+
+    let mut ids = BTreeSet::new();
+    while let Some(job) = consume_one(&t).await.context("consume_one")? {
+        ids.insert(job.id);
+        complete(&t, &job).await.context("complete")?;
+    }
+
+    t.commit().await?;
+
+    assert_eq!(ids, btreeset! {b.id});
+
+    Ok(())
+}
