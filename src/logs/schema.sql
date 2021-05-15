@@ -117,3 +117,19 @@ DO $$
         END IF;
     END
 $$;
+
+-- Split
+
+DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT true FROM pg_attribute
+            WHERE attrelid = 'logs'::regclass
+            AND attname = 'tx_id'
+            AND attnotnull
+            AND NOT attisdropped
+        ) THEN
+            ALTER TABLE logs ALTER COLUMN tx_id SET NOT NULL;
+        END IF;
+    END
+$$;
